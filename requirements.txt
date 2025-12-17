@@ -1,6 +1,6 @@
 pandas
-numpy
-scikit-learn
-python-dotenv
 requests
-matplotlib
+python-dotenv
+openpyxl
+scikit-learn
+joblib
