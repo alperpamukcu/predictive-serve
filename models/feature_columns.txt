@@ -27,6 +27,9 @@ round_importance
 is_final
 is_semi
 is_quarter
+series_tier
+is_grand_slam
+is_bo5_match
 oddsA
 oddsB
 pA_market

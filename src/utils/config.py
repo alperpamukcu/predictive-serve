@@ -1,26 +1,29 @@
-# src/utils/config.py
-
 from pathlib import Path
-from dotenv import load_dotenv
 import os
 
-# Proje kök dizini (repo root)
-ROOT_DIR = Path(__file__).resolve().parents[2]
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
-# .env dosyasını yükle
-env_path = ROOT_DIR / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
+# Proje kök dizini: .../predictive-serve
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Ana data klasörü (varsayılan: data/)
-DATA_DIR = ROOT_DIR / os.getenv("DATA_DIR", "data")
-
-# Ham ve işlenmiş data klasörleri
+# Ana klasörler
+DATA_DIR = PROJECT_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+MODELS_DIR = PROJECT_ROOT / "models"
+LOGS_DIR = PROJECT_ROOT / "logs"
+NOTEBOOKS_DIR = PROJECT_ROOT / "notebooks"
+ALLYEARS_DIR = RAW_DIR / "allyears"
+ALLYEARS_PATH = ALLYEARS_DIR / "allyears.csv"
 
-# Tennis-data allyears dosyasının hedef yolu
-ALLYEARS_PATH = RAW_DIR / "allyears" / "allyears.csv"
+# Gerekli klasörleri oluştur
+for d in [DATA_DIR, RAW_DIR, PROCESSED_DIR, MODELS_DIR, LOGS_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
-# (Eski) Sportsdata key - şu an kullanılmıyor ama dursa da olur
-SPORTSDATA_API_KEY = os.getenv("SPORTSDATA_API_KEY", "")
+# .env dosyasını yükle (varsa)
+env_path = PROJECT_ROOT / ".env"
+if load_dotenv is not None and env_path.exists():
+    load_dotenv(env_path)

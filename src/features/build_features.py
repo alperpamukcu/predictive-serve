@@ -8,7 +8,8 @@ import pandas as pd
 
 from src.utils.config import PROCESSED_DIR
 
-INPUT_PATH = PROCESSED_DIR / "matches_with_elo_form.csv"
+# Artık set feature'ları da içeren dosyadan okuyacağız:
+INPUT_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
 OUTPUT_PATH = PROCESSED_DIR / "train_dataset.csv"
 
 
@@ -20,12 +21,14 @@ def _find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     return None
 
 
+# ----------------------------------------------------------------------
 # 1) H2H FEATURE'LARI
+# ----------------------------------------------------------------------
 def add_h2h_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Head-to-Head (H2H) feature'larını hesaplar.
 
-    Varsayım: matches_with_elo_form.csv'de playerA = maçı kazanan,
+    Varsayım: matches_with_elo_form_sets.csv'de playerA = maçı kazanan,
               playerB = kaybeden oyuncu.
     """
     df = df.copy()
@@ -109,10 +112,12 @@ def add_h2h_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# 2) ROUND FEATURE'LARI
-def add_tournament_features(df: pd.DataFrame) -> pd.DataFrame:
+# ----------------------------------------------------------------------
+# 2) ROUND + TURNAVU SEVİYESİ FEATURE'LARI
+# ----------------------------------------------------------------------
+def add_tournament_round_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Turnuvanın sadece round bilgisini feature'a çevirir.
+    Turnuvanın round bilgisini feature'a çevirir.
 
     - round_importance: 1-7 arası önem skoru
     - is_final, is_semi, is_quarter: boolean
@@ -151,7 +156,74 @@ def add_tournament_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def map_series_tier(series_value: str) -> float:
+    """
+    Series kolonunu turnuva seviyesi skoruna çevirir.
+    Basit bir hiyerarşi:
+        Grand Slam   -> 4.0
+        Tour Finals / Masters Cup -> 3.5
+        Masters 1000 -> 3.0
+        ATP 500      -> 2.0
+        ATP 250 / International -> 1.5
+        Challenger   -> 0.8
+        Futures      -> 0.5
+        Diğer        -> 1.0
+    """
+    if not isinstance(series_value, str):
+        return 1.0
+
+    s = series_value.lower()
+
+    if "grand slam" in s:
+        return 4.0
+    if "tour finals" in s or "masters cup" in s:
+        return 3.5
+    if "masters" in s or "1000" in s:
+        return 3.0
+    if "atp 500" in s or "int. gold" in s:
+        return 2.0
+    if "atp 250" in s or "international" in s or "world tour" in s:
+        return 1.5
+    if "challenger" in s:
+        return 0.8
+    if "future" in s:
+        return 0.5
+
+    return 1.0
+
+
+def add_series_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Turnuva seviyesi ile ilgili feature'lar:
+
+      - series_tier: Series string'inden türetilmiş numeric skor
+      - is_grand_slam: Grand Slam turnuvaları için 1
+      - is_bo5_match: inferred_best_of == 5 ise 1
+    """
+    df = df.copy()
+
+    series_col = _find_column(df, ["Series", "series"])
+    if series_col is not None:
+        series_raw = df[series_col].astype(str)
+        df["series_tier"] = series_raw.apply(map_series_tier)
+        df["is_grand_slam"] = series_raw.str.contains("Grand Slam", case=False, na=False).astype(int)
+    else:
+        print("[series] Series kolonu bulunamadı, varsayılan series_tier/is_grand_slam kullanılacak.")
+        df["series_tier"] = 1.0
+        df["is_grand_slam"] = 0
+
+    # sets.py tarafından eklenen inferred_best_of varsa, bunu da kullan
+    if "inferred_best_of" in df.columns:
+        df["is_bo5_match"] = (df["inferred_best_of"] == 5).astype(int)
+    else:
+        df["is_bo5_match"] = 0
+
+    return df
+
+
+# ----------------------------------------------------------------------
 # 3) A/B PERSPEKTİF ÇEVİRME
+# ----------------------------------------------------------------------
 def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
     """
     Başlangıçta playerA = kazanan.
@@ -182,6 +254,10 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("oddsA", "oddsB"),
         # H2H winrate kolonlarını da swap et
         ("h2h_winrateA", "h2h_winrateB"),
+        # Set winrate kolonlarını da swap et
+        ("set_winrate_overallA", "set_winrate_overallB"),
+        ("set_winrate_bo3A", "set_winrate_bo3B"),
+        ("set_winrate_bo5A", "set_winrate_bo5B"),
     ]
 
     for colA, colB in col_pairs:
@@ -193,7 +269,9 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
     return df
 
 
+# ----------------------------------------------------------------------
 # 4) MARKET FEATURE'LARI
+# ----------------------------------------------------------------------
 def add_market_features(df: pd.DataFrame) -> pd.DataFrame:
     """Bahis oranlarından implied probability feature'ları üretir."""
     df = df.copy()
@@ -214,7 +292,9 @@ def add_market_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ----------------------------------------------------------------------
 # 5) DAYS FEATURE'LARI
+# ----------------------------------------------------------------------
 def clip_days_features(df: pd.DataFrame, max_days: int = 365) -> pd.DataFrame:
     """days_since_last* feature'larını uç değerlerden korumak için kırpar."""
     df = df.copy()
@@ -231,19 +311,30 @@ def clip_days_features(df: pd.DataFrame, max_days: int = 365) -> pd.DataFrame:
     return df
 
 
+# ----------------------------------------------------------------------
 # 6) FARK FEATURE'LARI
+# ----------------------------------------------------------------------
 def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     """A ve B arasındaki fark feature'larını ekler."""
     df = df.copy()
 
-    df["elo_diff"] = df["eloA"] - df["eloB"]
-    df["elo_surface_diff"] = df["elo_surfaceA"] - df["elo_surfaceB"]
+    # Elo
+    if "eloA" in df.columns and "eloB" in df.columns:
+        df["elo_diff"] = df["eloA"] - df["eloB"]
+    if "elo_surfaceA" in df.columns and "elo_surfaceB" in df.columns:
+        df["elo_surface_diff"] = df["elo_surfaceA"] - df["elo_surfaceB"]
 
-    df["form_winrate_diff_5"] = df["form_winrateA_5"] - df["form_winrateB_5"]
-    df["form_winrate_diff_10"] = df["form_winrateA_10"] - df["form_winrateB_10"]
+    # Form
+    if "form_winrateA_5" in df.columns and "form_winrateB_5" in df.columns:
+        df["form_winrate_diff_5"] = df["form_winrateA_5"] - df["form_winrateB_5"]
+    if "form_winrateA_10" in df.columns and "form_winrateB_10" in df.columns:
+        df["form_winrate_diff_10"] = df["form_winrateA_10"] - df["form_winrateB_10"]
 
-    df["matches_last30_diff"] = df["matches_last30A"] - df["matches_last30B"]
+    # Maç sayısı
+    if "matches_last30A" in df.columns and "matches_last30B" in df.columns:
+        df["matches_last30_diff"] = df["matches_last30A"] - df["matches_last30B"]
 
+    # Rank
     if "rankA" in df.columns and "rankB" in df.columns:
         df["rank_diff"] = df["rankA"] - df["rankB"]
 
@@ -251,10 +342,20 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     if "h2h_winrateA" in df.columns and "h2h_winrateB" in df.columns:
         df["h2h_winrate_diff"] = df["h2h_winrateA"] - df["h2h_winrateB"]
 
+    # Set winrate farkları
+    if "set_winrate_overallA" in df.columns and "set_winrate_overallB" in df.columns:
+        df["set_winrate_overall_diff"] = df["set_winrate_overallA"] - df["set_winrate_overallB"]
+    if "set_winrate_bo3A" in df.columns and "set_winrate_bo3B" in df.columns:
+        df["set_winrate_bo3_diff"] = df["set_winrate_bo3A"] - df["set_winrate_bo3B"]
+    if "set_winrate_bo5A" in df.columns and "set_winrate_bo5B" in df.columns:
+        df["set_winrate_bo5_diff"] = df["set_winrate_bo5A"] - df["set_winrate_bo5B"]
+
     return df
 
 
+# ----------------------------------------------------------------------
 # 7) ANA PIPELINE
+# ----------------------------------------------------------------------
 def build_feature_dataset(
     input_path: Path = INPUT_PATH,
     output_path: Path = OUTPUT_PATH,
@@ -263,12 +364,15 @@ def build_feature_dataset(
     if not input_path.exists():
         raise FileNotFoundError(f"Girdi dosyası bulunamadı: {input_path}")
 
-    print(f"[features] Reading matches_with_elo_form from: {input_path}")
+    print(f"[features] Reading matches_with_elo_form_sets from: {input_path}")
     df = pd.read_csv(input_path)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
     # 0) Round feature'ları
-    df = add_tournament_features(df)
+    df = add_tournament_round_features(df)
+
+    # 0.5) Turnuva seviyesi (Series + inferred_best_of)
+    df = add_series_features(df)
 
     # 1) H2H feature'ları (playerA = winner, playerB = loser aşamasında)
     df = add_h2h_features(df)
@@ -276,6 +380,7 @@ def build_feature_dataset(
     # 2) Surface one-hot feature'lar
     surface_dummies = pd.get_dummies(df["surface"], prefix="surface")
     df = pd.concat([df, surface_dummies], axis=1)
+    surface_feature_cols = surface_dummies.columns.tolist()
 
     # 3) A/B perspektifini rastgele çevir, y etiketini oluştur
     df = random_flip_perspective(df, seed=42)
@@ -286,10 +391,8 @@ def build_feature_dataset(
     # 5) Gün farkı feature'larını kırp ve farklarını ekle
     df = clip_days_features(df, max_days=365)
 
-    # 6) Elo, form, rank, maç sayısı, H2H farkları
+    # 6) Elo, form, rank, maç sayısı, H2H, set winrate farkları
     df = add_diff_features(df)
-
-    surface_feature_cols = surface_dummies.columns.tolist()
 
     # 7) Kullanacağımız ana feature listesi
     feature_cols = [
@@ -308,6 +411,12 @@ def build_feature_dataset(
         "h2h_matches", "h2h_winrateA", "h2h_winrateB", "h2h_winrate_diff",
         # Round
         "round_importance", "is_final", "is_semi", "is_quarter",
+        # Turnuva seviyesi
+        "series_tier", "is_grand_slam", "is_bo5_match",
+        # Set bazlı performans
+        "set_winrate_overallA", "set_winrate_overallB", "set_winrate_overall_diff",
+        "set_winrate_bo3A", "set_winrate_bo3B", "set_winrate_bo3_diff",
+        "set_winrate_bo5A", "set_winrate_bo5B", "set_winrate_bo5_diff",
         # Market odds
         "oddsA", "oddsB",
         "pA_market", "pB_market", "p_diff", "logit_pA_market",
