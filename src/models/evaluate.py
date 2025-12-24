@@ -1,5 +1,4 @@
 import pandas as pd
-from pathlib import Path
 import joblib
 from sklearn.metrics import log_loss, brier_score_loss, accuracy_score
 
@@ -83,12 +82,16 @@ def main():
 
     # Metrikleri yazdır
     print("\n[eval] Sonuçlar (2022+ validation):")
-    print(f"  Model  - logloss: {results['logloss_model']:.6f}, "
-          f"brier: {results['brier_model']:.6f}, "
-          f"accuracy: {results['acc_model']:.6f}")
-    print(f"  Market - logloss: {results['logloss_market']:.6f}, "
-          f"brier: {results['brier_market']:.6f}, "
-          f"accuracy: {results['acc_market']:.6f}")
+    print(
+        f"  Model  - logloss: {results['logloss_model']:.6f}, "
+        f"brier: {results['brier_model']:.6f}, "
+        f"accuracy: {results['acc_model']:.6f}"
+    )
+    print(
+        f"  Market - logloss: {results['logloss_market']:.6f}, "
+        f"brier: {results['brier_market']:.6f}, "
+        f"accuracy: {results['acc_market']:.6f}"
+    )
 
 
 if __name__ == "__main__":
