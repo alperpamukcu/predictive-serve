@@ -12,6 +12,7 @@ import pandas as pd
 from joblib import load
 
 from src.utils.config import PROCESSED_DIR, MODELS_DIR
+from src.utils.feature_utils import load_feature_list
 
 
 HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
@@ -29,13 +30,6 @@ class PlayerSnapshot:
     days_since_last: float
     matches_last30: float
     rank: float
-
-
-def load_feature_list(path: Path) -> List[str]:
-    with path.open("r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
-
-
 def map_round_importance(round_code: Optional[str]) -> Tuple[float, int, int, int]:
     """build_features.py ile uyumlu round feature'ları döner."""
     if not round_code:

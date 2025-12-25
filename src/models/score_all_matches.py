@@ -9,6 +9,7 @@ import pandas as pd
 from joblib import load
 
 from src.utils.config import PROCESSED_DIR, MODELS_DIR
+from src.utils.feature_utils import load_feature_list
 
 
 TRAIN_PATH = PROCESSED_DIR / "train_dataset.csv"
@@ -16,13 +17,6 @@ ALL_PRED_PATH = PROCESSED_DIR / "all_predictions.csv"
 FEATURE_LIST_PATH = MODELS_DIR / "feature_columns.txt"
 MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
 IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
-
-
-def load_feature_list(path: Path) -> list[str]:
-    with path.open("r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
-
-
 def main() -> None:
     print(f"[score_all] Train dataset okunuyor: {TRAIN_PATH}")
     df = pd.read_csv(TRAIN_PATH)

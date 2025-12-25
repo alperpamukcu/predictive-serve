@@ -1,6 +1,5 @@
 pandas
 requests
-python-dotenv
 openpyxl
 scikit-learn
 joblib

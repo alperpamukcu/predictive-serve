@@ -17,12 +17,7 @@ RAW_DIR: Path = DATA_DIR / "raw"
 PROCESSED_DIR: Path = DATA_DIR / "processed"
 
 MODELS_DIR: Path = PROJECT_ROOT / "models"
-LOGS_DIR: Path = PROJECT_ROOT / "logs"
 NOTEBOOKS_DIR: Path = PROJECT_ROOT / "notebooks"
 
 # allyears.csv için canonical path
-ALLYEARS_DIR: Path = RAW_DIR / "allyears"
-ALLYEARS_PATH: Path = ALLYEARS_DIR / "allyears.csv"
-
-# Varsayılan log dosyası (istersen kullanırsın)
-DEFAULT_LOG_FILE: Path = LOGS_DIR / "app.log"
+ALLYEARS_PATH: Path = RAW_DIR / "allyears.csv"

@@ -23,7 +23,7 @@ def load_bo5_tournaments_from_raw():
     allyears.csv içinden 'Best of' = 5 olan tüm turnuva isimlerini okuyup
     lowercase bir set olarak döndürür.
     """
-    allyears_path = RAW_DIR / "allyears" / "allyears.csv"
+    allyears_path = RAW_DIR / "allyears.csv"
     if not allyears_path.exists():
         print("[sets] allyears.csv bulunamadı, raw'dan bo5 turnuva listesi yüklenemedi.")
         return set()

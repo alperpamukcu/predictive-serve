@@ -5,10 +5,9 @@ Tennis-data.co.uk'den 2000-2025 arası sezonları indirip
 tek bir allyears.csv dosyasında birleştiren script.
 
 Elle dosya indirmeye gerek yok; bu script:
-- data/raw/allyears klasörünü oluşturur
 - Her yılın .xlsx dosyasını indirir
 - Hepsini tek bir DataFrame'de birleştirir
-- data/raw/allyears/allyears.csv olarak kaydeder
+- data/raw/allyears.csv olarak kaydeder
 """
 
 from io import BytesIO

@@ -10,13 +10,14 @@ import streamlit as st
 from joblib import load
 
 from src.utils.config import PROCESSED_DIR, MODELS_DIR
+from src.utils.feature_utils import load_feature_list
 
 try:
     from src.analysis.metrics import compute_overall_metrics  # type: ignore
 except Exception:
     compute_overall_metrics = None
 
-from src.predict.whatif import load_feature_list, build_feature_row  # type: ignore
+from src.predict.whatif import build_feature_row  # type: ignore
 
 
 # =========================
