@@ -136,7 +136,6 @@ def compute_h2h(
 
     return total, winsA / total, winsB / total
 
-
 def build_feature_row(
     history: pd.DataFrame,
     feature_cols: List[str],
@@ -147,7 +146,10 @@ def build_feature_row(
     round_code: Optional[str] = None,
     oddsA: Optional[float] = None,
     oddsB: Optional[float] = None,
+    snapshot_dateA: Optional[pd.Timestamp] = None,   # ✅ EKLENDİ
+    snapshot_dateB: Optional[pd.Timestamp] = None,   # ✅ EKLENDİ
 ) -> pd.DataFrame:
+
     """
     Logistic regression modelinin beklediği feature kolonlarıyla uyumlu
     tek satırlık bir DataFrame üretir.
