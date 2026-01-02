@@ -681,7 +681,26 @@ predictive-serve/
 
 ## 🧪 Test ve Kullanım
 
-### Kurulum
+### 🚀 Hızlı Başlangıç (Windows - Tek Tıkla Çalıştırma)
+
+**En kolay yöntem:** `run_predictive_serve.bat` dosyasını çift tıklayın!
+
+Bu script otomatik olarak:
+- ✅ Gerekli paketleri kontrol eder ve yükler
+- ✅ Tennis-data.co.uk'den **güncel verileri** çeker (2000-2025)
+- ✅ Tüm veri işleme adımlarını çalıştırır (preprocess, cleaning, features)
+- ✅ Modeli eğitir ve tahminler yapar
+- ✅ Streamlit web arayüzünü başlatır
+
+**Kullanım:**
+```bash
+# Windows'ta çift tıklayın veya:
+run_predictive_serve.bat
+```
+
+**Not:** İlk çalıştırmada veri indirme ve model eğitimi birkaç dakika sürebilir. Sonraki çalıştırmalarda sadece güncel veriler indirilir ve pipeline yeniden çalıştırılır.
+
+### Kurulum (Manuel)
 
 ```bash
 pip install -r requirements.txt

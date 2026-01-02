@@ -54,3 +54,6 @@ Thumbs.db
 *.bak
 *.swp
 
+# Presentation visual generation scripts
+create_additional_visuals.py
+
