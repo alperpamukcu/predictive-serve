@@ -2,207 +2,155 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
+rem ============================================================
+rem  PREDICTIVE SERVE - ONE CLICK LAUNCHER (WINDOWS)
+rem ============================================================
 echo.
-echo ========================================
-echo   PREDICTIVE SERVE - FULL PIPELINE
-echo ========================================
-echo.
-echo Bu script:
-echo   - Tennis-data.co.uk'den güncel verileri çeker
-echo   - Tüm veri işleme adımlarını çalıştırır
-echo   - Modeli eğitir ve tahminler yapar
-echo   - Streamlit web arayüzünü başlatır
-echo.
-echo ========================================
+echo ==========================================
+echo   Predictive Serve - Full Pipeline + UI
+echo ==========================================
 echo.
 
-REM Python kontrolü (py launcher kullanılıyor)
+rem Change working directory to the project root (folder of this script)
+cd /d "%~dp0"
+
+rem ------------------------------------------------------------
+rem 1) Check Python (py launcher)
+rem ------------------------------------------------------------
 where py >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [HATA] Python bulunamadı! Lütfen Python'u yükleyin.
-    echo       Python'u https://www.python.org/downloads/ adresinden indirebilirsiniz.
-    echo       Kurulum sırasında "Add Python to PATH" seçeneğini işaretlemeyi unutmayın!
+    echo [ERROR] Python launcher "py" not found.
+    echo         Please install Python from https://www.python.org/downloads/
+    echo         and make sure "Add Python to PATH" is checked.
     pause
     exit /b 1
 )
 
-echo [OK] Python bulundu
+echo [OK] Python launcher found.
 for /f "tokens=*" %%i in ('py --version 2^>^&1') do set PYTHON_VERSION=%%i
 echo %PYTHON_VERSION%
 echo.
 
-REM Gerekli paketlerin kontrolü
-echo [1/11] Gerekli paketler kontrol ediliyor...
-py -c "import pandas, numpy, sklearn, streamlit, joblib, requests, openpyxl" >nul 2>&1
+rem ------------------------------------------------------------
+rem 2) Install / update dependencies
+rem ------------------------------------------------------------
+echo [1/5] Installing Python dependencies from requirements.txt ...
+py -m pip install -r requirements.txt --quiet --disable-pip-version-check
 if %errorlevel% neq 0 (
-    echo [UYARI] Bazı paketler eksik. Yükleniyor...
-    echo        Bu işlem birkaç dakika sürebilir...
-    py -m pip install -r requirements.txt --quiet --disable-pip-version-check
-    if !errorlevel! neq 0 (
-        echo [HATA] Paket yükleme başarısız!
-        echo       Lütfen manuel olarak çalıştırın: py -m pip install -r requirements.txt
-        pause
-        exit /b 1
-    )
-    echo [OK] Paketler yüklendi
-) else (
-    echo [OK] Tüm paketler yüklü
+    echo.
+    echo [ERROR] Failed to install dependencies from requirements.txt
+    echo         You can try manually:
+    echo             py -m pip install -r requirements.txt
+    pause
+    exit /b 1
 )
-
-REM Proje dizinine geç
-cd /d "%~dp0"
-
-echo.
-echo ========================================
-echo   VERİ İŞLEME AŞAMASI
-echo ========================================
+echo [OK] Dependencies are installed.
 echo.
 
-echo [2/11] Veri toplama başlatılıyor (tennis-data.co.uk)...
-echo        Tennis-data.co.uk'den 2000-2025 yılları arası veriler indiriliyor...
-echo        Bu işlem birkaç dakika sürebilir (internet hızına bağlı)...
+rem ------------------------------------------------------------
+rem 3) Run full data and feature pipeline
+rem     - Fetch 2000–2026 data from tennis-data.co.uk
+rem     - Build processed datasets and train the model
+rem ------------------------------------------------------------
+echo ==========================================
+echo   Running data and model pipeline
+echo ==========================================
+echo.
+
+echo [2/5] Fetching raw match data (2000–2026) ...
 py -m src.data.fetch_data
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Veri toplama başarısız!
-    echo       Lütfen internet bağlantınızı kontrol edin.
+    echo [ERROR] Data fetch failed. Please check your internet connection
+    echo         or try running: py -m src.data.fetch_data
     pause
     exit /b 1
 )
-echo [OK] Veri toplama tamamlandı
+echo [OK] Raw data fetched.
 echo.
 
-echo [3/11] Veri ön işleme (preprocess)...
-echo        Ham veri normalize ediliyor...
+echo [3/5] Preprocessing and cleaning ...
 py -m src.data.preprocess
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Preprocess başarısız!
+    echo [ERROR] Preprocess step failed.
     pause
     exit /b 1
 )
-echo [OK] Preprocess tamamlandı
-echo.
 
-echo [4/11] Veri temizleme (cleaning)...
-echo        Eksik ve hatalı veriler temizleniyor...
 py -m src.data.cleaning
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Cleaning başarısız!
+    echo [ERROR] Cleaning step failed.
     pause
     exit /b 1
 )
-echo [OK] Cleaning tamamlandı
+echo [OK] Preprocess and cleaning completed.
 echo.
 
-echo ========================================
-echo   FEATURE ENGINEERING AŞAMASI
-echo ========================================
-echo.
-
-echo [5/11] Elo rating hesaplama...
-echo        Oyuncuların güç skorları hesaplanıyor...
+echo [4/5] Feature engineering (Elo, form, sets, market, etc.) ...
 py -m src.features.elo
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Elo hesaplama başarısız!
+    echo [ERROR] Elo feature step failed.
     pause
     exit /b 1
 )
-echo [OK] Elo rating hesaplama tamamlandı
-echo.
 
-echo [6/11] Form feature'ları hesaplama...
-echo        Oyuncuların son performansları analiz ediliyor...
 py -m src.features.form
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Form feature hesaplama başarısız!
+    echo [ERROR] Form feature step failed.
     pause
     exit /b 1
 )
-echo [OK] Form feature'ları hesaplama tamamlandı
-echo.
 
-echo [7/11] Set feature'ları hesaplama...
-echo        Set bazlı performans istatistikleri hesaplanıyor...
+rem Best-effort set-based features (do not fail pipeline if this step fails)
 py -m src.features.sets
-if %errorlevel% neq 0 (
-    echo.
-    echo [HATA] Set feature hesaplama başarısız!
-    pause
-    exit /b 1
-)
-echo [OK] Set feature'ları hesaplama tamamlandı
-echo.
+echo [INFO] Set-based features step finished (best effort).
 
-echo [8/11] Tüm feature'ları birleştirme (build_features)...
-echo        H2H, Market, Round ve diğer feature'lar ekleniyor...
 py -m src.features.build_features
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Feature birleştirme başarısız!
+    echo [ERROR] Building training dataset failed.
     pause
     exit /b 1
 )
-echo [OK] Feature birleştirme tamamlandı
+echo [OK] Feature datasets are ready.
 echo.
 
-echo ========================================
-echo   MODEL EĞİTİMİ AŞAMASI
-echo ========================================
-echo.
-
-echo [9/11] Model eğitimi (Logistic Regression)...
-echo        Model eğitiliyor ve performans metrikleri hesaplanıyor...
-echo        Bu işlem birkaç dakika sürebilir...
+echo [5/5] Training model and scoring all matches ...
 py -m src.models.train_logreg
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Model eğitimi başarısız!
+    echo [ERROR] Model training failed.
     pause
     exit /b 1
 )
-echo [OK] Model eğitimi tamamlandı
-echo.
 
-echo [10/11] Tüm maçlara tahmin yapılıyor...
-echo         Geçmiş tüm maçlar için model tahminleri oluşturuluyor...
 py -m src.models.score_all_matches
 if %errorlevel% neq 0 (
-    echo [UYARI] Tahmin yapma başarısız, ancak devam ediliyor...
-    echo         Streamlit uygulaması yine de çalışacaktır.
-) else (
-    echo [OK] Tahmin işlemi tamamlandı
+    echo.
+    echo [WARN] Scoring all matches failed, UI will still start.
 )
-echo.
 
 echo.
-echo ========================================
-echo   PIPELINE TAMAMLANDI!
-echo ========================================
+echo ==========================================
+echo   Pipeline finished successfully
+echo ==========================================
 echo.
-echo [11/11] Streamlit web arayüzü başlatılıyor...
-echo.
-echo ========================================
-echo   UYGULAMA HAZIR!
-echo ========================================
-echo.
-echo Tarayıcınızda otomatik olarak açılacaktır.
-echo Eğer açılmazsa, tarayıcınızda şu adresi açın:
-echo    http://localhost:8501
-echo.
-echo Uygulamayı kapatmak için bu pencerede Ctrl+C tuşlarına basın.
-echo.
-echo ========================================
+echo Starting Streamlit UI on http://localhost:8501 ...
+echo (Press Ctrl+C in this window to stop the app.)
 echo.
 
-REM Streamlit uygulamasını başlat
+rem ------------------------------------------------------------
+rem 4) Launch Streamlit UI
+rem ------------------------------------------------------------
 py -m streamlit run streamlit_app.py
 
-REM Eğer streamlit kapanırsa
 echo.
-echo Streamlit uygulaması kapatıldı.
+echo Streamlit app has been closed.
 pause
+
+exit /b 0
 

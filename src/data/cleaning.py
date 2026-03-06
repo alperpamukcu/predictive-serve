@@ -26,9 +26,9 @@ def clean_matches(df: pd.DataFrame) -> pd.DataFrame:
     # 1) Tarih + oyuncu isimleri olmayan satırları at
     df = df.dropna(subset=["date", "playerA", "playerB"])
 
-    # 2) Yıl filtresi (2000–2025)
+    # 2) Yıl filtresi (2000–2026)
     df["year"] = df["date"].dt.year
-    df = df[(df["year"] >= 2000) & (df["year"] <= 2025)]
+    df = df[(df["year"] >= 2000) & (df["year"] <= 2026)]
 
     # 3) Odds'u sayıya çevir
     for col in ["oddsA", "oddsB"]:

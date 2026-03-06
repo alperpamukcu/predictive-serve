@@ -22,7 +22,7 @@ from src.utils.config import RAW_DIR, ALLYEARS_PATH
 
 BASE_URL = "http://www.tennis-data.co.uk"  # eski proje kodundaki URL
 START_YEAR = 2000
-END_YEAR = 2025  # istersen bunu güncelleyebilirsin
+END_YEAR = 2026  # güncel sezon dahil
 
 
 def download_season(year: int) -> pd.DataFrame:
