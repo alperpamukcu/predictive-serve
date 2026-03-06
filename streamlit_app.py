@@ -318,6 +318,9 @@ def normalize_predictions(df: pd.DataFrame) -> pd.DataFrame:
         df = df.rename(columns={"match_date": "date"})
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    
+    if "tourney" in df.columns and "tournament" not in df.columns:
+        df = df.rename(columns={"tourney": "tournament"})
 
     if "player_1" in df.columns and "playerA" not in df.columns:
         df = df.rename(columns={"player_1": "playerA"})
@@ -347,6 +350,9 @@ def normalize_history(df: pd.DataFrame) -> pd.DataFrame:
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
+    if "tourney" in df.columns and "tournament" not in df.columns:
+        df = df.rename(columns={"tourney": "tournament"})
+
     if "player_1" in df.columns and "playerA" not in df.columns:
         df = df.rename(columns={"player_1": "playerA"})
     if "player_2" in df.columns and "playerB" not in df.columns:
@@ -365,6 +371,36 @@ def load_predictions() -> Tuple[pd.DataFrame, str]:
         raise FileNotFoundError("Predictions not found.")
     df = pd.read_csv(path)
     df = normalize_predictions(df)
+
+    # ENRICHMENT: Merge with history to get tournament/round if missing
+    # predictions often lack these columns, but history has them.
+    if "tournament" not in df.columns or df["tournament"].isna().all():
+        hist_path = first_existing(HISTORY_CANDIDATES)
+        if hist_path and hist_path.exists():
+            hdf = pd.read_csv(hist_path)
+            hdf = normalize_history(hdf)
+            
+            # Use a subset to merge
+            cols_to_merge = ["date", "playerA", "playerB"]
+            cols_to_pull = ["tournament", "round"]
+            
+            # Check availability
+            av_cols = [c for c in cols_to_pull if c in hdf.columns and c not in df.columns]
+            
+            if av_cols:
+                # Deduplicate history just in case
+                hdf = hdf.drop_duplicates(subset=cols_to_merge)
+                
+                # DEBUG: Check overlap
+                # common = df.merge(hdf[cols_to_merge], on=cols_to_merge, how="inner")
+                # print(f"DEBUG: Common rows: {len(common)} / {len(df)}")
+                
+                df = df.merge(hdf[cols_to_merge + av_cols], on=cols_to_merge, how="left")
+                
+                # Check match success
+                nulls = df["tournament"].isna().sum()
+                print(f"DEBUG: Tournament nulls after merge: {nulls} / {len(df)}")
+
     return df, str(path)
 
 @st.cache_data(show_spinner=False)
@@ -396,7 +432,7 @@ def apply_global_filters(df: pd.DataFrame, d1, d2, surfaces: List[str]) -> pd.Da
     return out
 
 
-def apply_match_filters(df: pd.DataFrame, player_pick: str, tournament_q: str,
+def apply_match_filters(df: pd.DataFrame, player_pick: str, tournaments: List[str],
                         only_market: bool, only_model: bool, min_edge: Optional[float]) -> pd.DataFrame:
     out = df.copy()
 
@@ -405,9 +441,8 @@ def apply_match_filters(df: pd.DataFrame, player_pick: str, tournament_q: str,
         b = out.get("playerB", pd.Series("", index=out.index)).astype(str)
         out = out[(a == player_pick) | (b == player_pick)]
 
-    tq = clean_text(tournament_q).lower()
-    if tq and "tournament" in out.columns:
-        out = out[out["tournament"].astype(str).str.lower().str.contains(tq)]
+    if tournaments and "tournament" in out.columns:
+        out = out[out["tournament"].isin(tournaments)]
 
     if only_market and "pA_market" in out.columns:
         out = out[out["pA_market"].notna()]
@@ -732,7 +767,8 @@ t = T(lang)
 dev_mode = st.sidebar.checkbox(t["dev_mode"], value=False, key="dev_mode")
 
 # Reset button (clears filters + rerun)
-if st.sidebar.button(t["reset"], width="stretch"):
+if st.sidebar.button(t["reset"], use_container_width=True):
+    st.cache_data.clear() # FORCE CLEAR CACHE
     for k in [
         "g_dates", "g_surfaces",
         "m_player", "m_tourn", "m_only_market", "m_only_model", "m_min_edge",
@@ -790,7 +826,8 @@ with tab_matches:
     player_pick = st.sidebar.selectbox(t["player_pick"], player_opts, index=0, key="m_player")
     player_pick_internal = "__ALL__" if player_pick == t["player_any"] else player_pick
 
-    tournament_q = st.sidebar.text_input(t["tournament_search"], value="", key="m_tourn")
+    tourn_opts = safe_unique(pred_df, "tournament")
+    tournaments = st.sidebar.multiselect(t["tournament_search"], tourn_opts, key="m_tourn")
 
     only_market = st.sidebar.checkbox(t["only_market"], value=False, key="m_only_market")
     only_model = st.sidebar.checkbox(t["only_model"], value=True, key="m_only_model")
@@ -801,7 +838,7 @@ with tab_matches:
 
     # Apply global + match filters
     base = apply_global_filters(pred_df, g_d1, g_d2, g_surfaces)
-    fdf = apply_match_filters(base, player_pick_internal, tournament_q, only_market, only_model, min_edge)
+    fdf = apply_match_filters(base, player_pick_internal, tournaments, only_market, only_model, min_edge)
 
     st.write(f"{t['found']}: **{len(fdf):,}**")
 
@@ -848,7 +885,6 @@ with tab_matches:
         fdf = fdf.sort_values(sort_by, ascending=ascending)
 
     view = fdf[show_cols].head(limit).copy() if show_cols else fdf.head(limit).copy()
-    view.insert(0, "select", False)
 
     # RENAME COLS FOR UI
     # RENAME COLS FOR UI
@@ -890,7 +926,7 @@ with tab_matches:
     
     st.dataframe(
         view,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         height=400,
         selection_mode="single-row",
@@ -931,7 +967,7 @@ with tab_matches:
         render_match_card(simulated_row, t)
 
     if dev_mode:
-        st.caption(f"[DEV] match filters => player={player_pick} tourn='{tournament_q}' only_market={only_market} only_model={only_model} min_edge={min_edge}")
+        st.caption(f"[DEV] match filters => player={player_pick} tourn={tournaments} only_market={only_market} only_model={only_model} min_edge={min_edge}")
 
 
 # =========================
@@ -1051,14 +1087,19 @@ with tab_whatif:
         
         # --- NEW RESULT UI ---
         
+        is_A_winner = (winner == playerA)
+        # However, if players have same name, we use pA >= 0.5 logic
+        if playerA == playerB:
+             is_A_winner = (pA >= 0.5)
+
         # 1. Main Result Card
         st.markdown(f"""
-        <div class="ps-card" style="text-align: center; border-left: 6px solid {'#ff4b4b' if winner == playerA else '#4b9cff'};">
+        <div class="ps-card" style="text-align: center; border-left: 6px solid {'#ff4b4b' if is_A_winner else '#4b9cff'};">
             <div style="font-size: 1rem; opacity: 0.8;">PREDICTION</div>
             <div style="font-size: 2.2rem; font-weight: 800; margin: 10px 0;">
-                <span style="color: {'#ff4b4b' if winner == playerA else '#ddd'}">{playerA}</span>
+                <span style="color: {'#ff4b4b' if is_A_winner else '#ddd'}">{playerA} {'🏆' if is_A_winner else ''}</span>
                 <span style="font-size: 1rem; vertical-align: middle; opacity: 0.5;">vs</span>
-                <span style="color: {'#4b9cff' if winner == playerB else '#ddd'}">{playerB}</span>
+                <span style="color: {'#4b9cff' if not is_A_winner else '#ddd'}">{playerB} {'🏆' if not is_A_winner else ''}</span>
             </div>
             <div style="font-size: 1.2rem;">
                 🏆 <b>{winner}</b> wins with <b>{winner_prob*100:.1f}%</b> probability
@@ -1085,7 +1126,7 @@ with tab_whatif:
         if dev_mode:
             st.caption(f"[DEV] history source: {history_path}")
             with st.expander("[DEV] feature row"):
-                st.dataframe(row_df[feature_cols].T, width="stretch", height=450)
+                st.dataframe(row_df[feature_cols].T, use_container_width=True, height=450)
 
 
 # =========================
@@ -1168,7 +1209,7 @@ with tab_leaderboard:
 
     st.dataframe(
         agg.head(top_n), 
-        width="stretch", 
+        use_container_width=True, 
         height=420,
         column_config={
             "Win Rate": st.column_config.NumberColumn(format="%.1f%%"),
