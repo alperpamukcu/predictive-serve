@@ -19,14 +19,21 @@ MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
 IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
 def main() -> None:
     print(f"[score_all] Train dataset okunuyor: {TRAIN_PATH}")
-    df = pd.read_csv(TRAIN_PATH)
+    df = pd.read_csv(TRAIN_PATH, low_memory=False)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
     feature_cols = load_feature_list(FEATURE_LIST_PATH)
     print(f"[score_all] Feature sayısı: {len(feature_cols)}")
 
     X = df[feature_cols].copy()
-    y = df["y"].astype(int).values
+    # Be robust: drop rows with missing targets.
+    y0 = pd.to_numeric(df.get("y"), errors="coerce")
+    ok = y0.notna()
+    if not bool(ok.all()):
+        df = df.loc[ok].copy()
+        X = X.loc[ok].copy()
+        y0 = y0.loc[ok]
+    y = y0.astype(int).values
 
     print("[score_all] Model ve imputer yükleniyor...")
     model = load(MODEL_PATH)

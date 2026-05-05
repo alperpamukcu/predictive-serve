@@ -1,15 +1,15 @@
 ## Predictive Serve 🎾
 
-**Predictive Serve** is an end‑to‑end Python project for predicting tennis match outcomes, with a fully automated data pipeline and an interactive Streamlit UI.
+**Predictive Serve** is an end-to-end Python project for **tennis match forecasting** with a reproducible pipeline, Sportradar integrations (upcoming schedule + odds), and a polished Streamlit UI.
 
-The project:
-- **Downloads** historical ATP match data from `tennis-data.co.uk` (seasons **2000–2026**),
-- **Cleans** and standardizes the raw data into a consistent match schema,
-- **Builds features** (Elo ratings, form, rest, head‑to‑head, market, etc.),
-- **Trains** a Logistic Regression model,
-- **Scores** all matches and exposes them via a **Streamlit app** (Matches / What‑if / Leaderboard).
+### What it does
+- **Historical pipeline**: downloads and processes ATP match data from `tennis-data.co.uk` (seasons **2000–2026**)
+- **Feature engineering**: Elo, form, workload, head-to-head, surface, and optional market-derived features
+- **Model**: Logistic Regression baseline (fast, debuggable)
+- **Upcoming matches**: pulls fixtures from **Sportradar Tennis API** and enriches with **Sportradar Odds Comparison (OC Regular)** consensus lines (when available)
+- **UI**: Streamlit app (Matches Explorer, Upcoming, What-if, Players, Tournaments, Leaderboards)
 
-This repo is intended for **learning / academic use**: all steps are explicit and can be run end‑to‑end from the command line or via a one‑click Windows launcher.
+This repository is intended for **learning / portfolio / research** use. If you deploy it publicly, read the security & operations notes below.
 
 ---
 
@@ -39,6 +39,7 @@ From File Explorer, in the project root:
    - Runs the full data & feature pipeline
    - Trains the Logistic Regression model
    - Scores all matches and writes `data/processed/all_predictions.csv`
+   - (Optional) fetches upcoming fixtures + odds via Sportradar
    - Starts the Streamlit app
 3. When it finishes, your browser will open (or you can go to `http://localhost:8501`).
 
@@ -87,9 +88,54 @@ py -m streamlit run streamlit_app.py
 
 ---
 
-## 2. Project Overview
+## 2. API-Tennis (Upcoming + Odds + Player Logos)
 
-### 2.1. Problem
+### 2.1. Configure environment variables
+
+Copy `.env.example` to `.env` and fill the values (never commit `.env`):
+
+```bash
+cp .env.example .env
+```
+
+Required:
+- `API_TENNIS_KEY`
+
+Optional:
+- `API_TENNIS_PROXY` (recommended if your ISP blocks the host / “safe internet” filtering)
+
+### 2.2. Fetch upcoming fixtures
+
+```bash
+py -m src.data.fetch_upcoming_apitennis
+```
+
+Writes: `data/processed/fixtures_upcoming.csv`
+
+### 2.3. Enrich fixtures with odds
+
+```bash
+py -m src.data.fetch_odds_apitennis
+```
+
+Notes:
+- Odds availability depends on API-Tennis coverage. Not all fixtures will have odds.
+- You can bound runtime with `API_TENNIS_ODDS_MAX_ROWS` for faster public refresh cycles.
+
+### 2.4. Player logos (download + cache)
+
+```bash
+py -m src.data.fetch_player_images_apitennis
+```
+
+Logos are downloaded from the logo URLs returned by API-Tennis fixtures and cached under `assets/players/`.
+The UI also works without images thanks to an offline avatar placeholder fallback.
+
+---
+
+## 3. Project Overview
+
+### 3.1. Problem
 
 We want to answer:
 
@@ -101,7 +147,7 @@ Key elements:
 - **Model output**: \( P(\text{player A wins}) \)
 - **Baseline**: implied probabilities from bookmaker odds
 
-### 2.2. High‑level pipeline
+### 3.2. High-level pipeline
 
 ```text
 1. src/data/fetch_data.py
@@ -139,7 +185,7 @@ Key elements:
 
 ---
 
-## 3. Directory Structure
+## 4. Directory Structure
 
 ```text
 predictive-serve/
@@ -202,7 +248,7 @@ predictive-serve/
 
 ---
 
-## 4. Components in More Detail
+## 5. Components in More Detail
 
 ### 4.1. Data layer (`src/data`)
 
@@ -309,7 +355,7 @@ predictive-serve/
 
 ---
 
-## 5. Testing
+## 6. Testing
 
 ### 5.1. Quick structural test
 
@@ -333,7 +379,7 @@ Runs a more complete end‑to‑end test including:
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 - **`ModuleNotFoundError` or missing packages**
   - Run:
@@ -364,7 +410,20 @@ Runs a more complete end‑to‑end test including:
 
 ---
 
-## 7. Notes
+## 8. Security & Operations (for public deployments)
+
+If you deploy this publicly, do **not** expose keys to clients.
+
+- **Keys**: keep API keys in server-side environment variables (Streamlit Cloud secrets / Docker secrets / GitHub Actions secrets).
+- **No client-side calls**: Sportradar calls must be made from the backend (this repo does that).
+- **Refresh strategy**:
+  - Prefer a server-side scheduler (cron/GitHub Actions) that runs:
+    - `py -m src.data.fetch_upcoming_sportradar`
+    - `py -m src.data.fetch_odds_sportradar`
+  - Then the UI reads fresh CSVs. This keeps keys out of the browser and reduces rate-limit risk.
+- **Rate limits**: trial keys can receive **429**. The fetchers back off and continue safely.
+- **Data artifacts**: generated datasets and model binaries can be large. In this repo they are ignored by default via `.gitignore`. For releases, keep only small examples in `data/examples/`.
+
 
 - All important paths are centralized in `src/utils/config.py`.
 - Feature names used by the model are stored in `models/feature_columns.txt`.

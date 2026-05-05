@@ -18,28 +18,60 @@ import pandas as pd
 import requests
 
 from src.utils.config import RAW_DIR, ALLYEARS_PATH
+from src.utils.config import PROJECT_ROOT
+from src.utils.env import try_load_dotenv, getenv, getenv_int
 
 
-BASE_URL = "http://www.tennis-data.co.uk"  # eski proje kodundaki URL
+BASE_URL = "http://www.tennis-data.co.uk"  # default
 START_YEAR = 2000
 END_YEAR = 2026  # güncel sezon dahil
 
 
-def download_season(year: int) -> pd.DataFrame:
+def _session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(
+        {
+            # be explicit; some proxies/hosts behave differently without UA
+            "User-Agent": "predictive-serve/1.0 (+https://example.invalid)",
+            "Accept": "*/*",
+        }
+    )
+    return s
+
+
+def _proxies_from_env() -> dict | None:
+    """
+    Support a single proxy env var for this datasource.
+    If TEN_DATA_PROXY is set, use it for both http/https.
+    """
+    p = getenv("TEN_DATA_PROXY")
+    if not p:
+        return None
+    return {"http": p, "https": p}
+
+
+def download_season(year: int, sess: requests.Session, base_url: str, timeout_s: int, retries: int) -> pd.DataFrame:
     """
     Verilen yıl için tennis-data.co.uk'den .xlsx dosyasını indirir ve DataFrame'e çevirir.
     Örn: http://www.tennis-data.co.uk/2020/2020.xlsx
     """
-    url = f"{BASE_URL}/{year}/{year}.xlsx"
+    url = f"{base_url.rstrip('/')}/{year}/{year}.xlsx"
     print(f"[fetch_data] Downloading {year} from {url}")
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-
-    # Excel içeriğini hafızaya alıp pandas ile oku
-    buffer = BytesIO(resp.content)
-    df = pd.read_excel(buffer)
-    df["source_year"] = year
-    return df
+    proxies = _proxies_from_env()
+    last_err: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            resp = sess.get(url, timeout=timeout_s, proxies=proxies)
+            resp.raise_for_status()
+            buffer = BytesIO(resp.content)
+            df = pd.read_excel(buffer)
+            df["source_year"] = year
+            return df
+        except Exception as e:
+            last_err = e
+            print(f"[fetch_data] WARNING: {year} attempt {attempt}/{retries} failed: {e}")
+    assert last_err is not None
+    raise last_err
 
 
 def build_allyears_csv(
@@ -55,11 +87,17 @@ def build_allyears_csv(
     allyears_dir = output_path.parent
     allyears_dir.mkdir(parents=True, exist_ok=True)
 
+    try_load_dotenv(PROJECT_ROOT)
+    base_url = getenv("TEN_DATA_BASE_URL", BASE_URL) or BASE_URL
+    timeout_s = int(getenv_int("TEN_DATA_TIMEOUT_S", 30))
+    retries = int(getenv_int("TEN_DATA_RETRIES", 3))
+
+    sess = _session()
     all_seasons: List[pd.DataFrame] = []
 
     for year in range(start_year, end_year + 1):
         try:
-            df_year = download_season(year)
+            df_year = download_season(year, sess=sess, base_url=base_url, timeout_s=timeout_s, retries=retries)
             all_seasons.append(df_year)
         except Exception as e:
             print(f"[fetch_data] WARNING: {year} indirilemedi: {e}")

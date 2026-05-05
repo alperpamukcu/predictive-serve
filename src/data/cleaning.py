@@ -34,14 +34,19 @@ def clean_matches(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["oddsA", "oddsB"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # 4) Odds'u eksik olan satırları at
-    df = df.dropna(subset=["oddsA", "oddsB"])
-
-    # 5) Odds için mantıklı aralık filtresi
-    df = df[
-        (df["oddsA"] >= 1.01) & (df["oddsA"] <= 100.0) &
-        (df["oddsB"] >= 1.01) & (df["oddsB"] <= 100.0)
-    ]
+    # 4) Odds opsiyonel:
+    # Model eğitimi market odds feature'larını zaten dışlıyor; bu yüzden odds yok diye satır atmak
+    # veri kapsamını düşürür ve bias yaratır. Burada sadece "varsa" mantıklı aralıkta olmasını isteriz.
+    has_oddsA = df["oddsA"].notna()
+    has_oddsB = df["oddsB"].notna()
+    both_odds = has_oddsA & has_oddsB
+    if both_odds.any():
+        in_range = (
+            (df["oddsA"] >= 1.01) & (df["oddsA"] <= 100.0) &
+            (df["oddsB"] >= 1.01) & (df["oddsB"] <= 100.0)
+        )
+        # Keep rows without odds; filter only rows with both odds present
+        df = df[(~both_odds) | in_range]
 
     # 6) Tamamlanmamış maçları çıkar (retired, walkover, abandon vb.)
     df["comment"] = df["comment"].fillna("").astype(str)
