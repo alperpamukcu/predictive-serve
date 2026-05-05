@@ -276,18 +276,33 @@ def add_market_features(df: pd.DataFrame) -> pd.DataFrame:
     """Bahis oranlarından implied probability feature'ları üretir."""
     df = df.copy()
 
-    invA = 1.0 / df["oddsA"]
-    invB = 1.0 / df["oddsB"]
+    # Indicator for market availability
+    df["has_market"] = (df["oddsA"].notna() & df["oddsB"].notna()).astype(int)
+
+    # Compute market-derived features only where both odds exist.
+    invA = np.where(df["has_market"].astype(bool), 1.0 / df["oddsA"].astype(float), np.nan)
+    invB = np.where(df["has_market"].astype(bool), 1.0 / df["oddsB"].astype(float), np.nan)
     denom = invA + invB
 
-    df["pA_market"] = invA / denom
-    df["pB_market"] = invB / denom
+    pA = invA / denom
+    pB = invB / denom
+
+    # Neutral defaults when market is missing (prevents imputer median artifacts)
+    df["pA_market"] = np.where(df["has_market"].astype(bool), pA, 0.5)
+    df["pB_market"] = np.where(df["has_market"].astype(bool), pB, 0.5)
+    df["p_diff"] = np.where(df["has_market"].astype(bool), df["pA_market"] - df["pB_market"], 0.0)
 
     eps = 1e-6
-    df["logit_pA_market"] = np.log(
-        (df["pA_market"] + eps) / (1.0 - df["pA_market"] + eps)
+    df["logit_pA_market"] = np.where(
+        df["has_market"].astype(bool),
+        np.log((df["pA_market"] + eps) / (1.0 - df["pA_market"] + eps)),
+        0.0,
     )
-    df["p_diff"] = df["pA_market"] - df["pB_market"]
+
+    # Keep odds as numeric (but do NOT fill missing with constants).
+    # Missing odds are common for some matches; we represent them via has_market + neutral pA_market defaults above.
+    df["oddsA"] = pd.to_numeric(df["oddsA"], errors="coerce")
+    df["oddsB"] = pd.to_numeric(df["oddsB"], errors="coerce")
 
     return df
 
@@ -336,6 +351,9 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Rank
     if "rankA" in df.columns and "rankB" in df.columns:
+        # ranks can arrive as mixed types (strings in some seasons) -> coerce to numeric
+        df["rankA"] = pd.to_numeric(df["rankA"], errors="coerce")
+        df["rankB"] = pd.to_numeric(df["rankB"], errors="coerce")
         df["rank_diff"] = df["rankA"] - df["rankB"]
 
     # H2H winrate farkı
@@ -365,8 +383,13 @@ def build_feature_dataset(
         raise FileNotFoundError(f"Girdi dosyası bulunamadı: {input_path}")
 
     print(f"[features] Reading matches_with_elo_form_sets from: {input_path}")
-    df = pd.read_csv(input_path)
+    df = pd.read_csv(input_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # Coerce common numeric columns (prevents dtype-mix issues downstream)
+    for c in ["rankA", "rankB", "oddsA", "oddsB", "matches_last30A", "matches_last30B", "days_since_lastA", "days_since_lastB"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
     # 0) Round feature'ları
     df = add_tournament_round_features(df)
@@ -419,6 +442,7 @@ def build_feature_dataset(
         "set_winrate_bo5A", "set_winrate_bo5B", "set_winrate_bo5_diff",
         # Market odds
         "oddsA", "oddsB",
+        "has_market",
         "pA_market", "pB_market", "p_diff", "logit_pA_market",
     ] + surface_feature_cols  # surface_* feature'ları da ekle
 

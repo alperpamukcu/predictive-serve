@@ -88,7 +88,7 @@ py -m streamlit run streamlit_app.py
 
 ---
 
-## 2. Sportradar (Upcoming + Odds + Assets)
+## 2. API-Tennis (Upcoming + Odds + Player Logos)
 
 ### 2.1. Configure environment variables
 
@@ -98,40 +98,38 @@ Copy `.env.example` to `.env` and fill the values (never commit `.env`):
 cp .env.example .env
 ```
 
-Required for **Upcoming fixtures**:
-- `SPORTRADAR_TENNIS_API_KEY`
+Required:
+- `API_TENNIS_KEY`
 
-Optional (adds value):
-- `SPORTRADAR_ODDS_API_KEY` (Odds Comparison Regular / OC Regular)
-- `SPORTRADAR_IMAGES_API_KEY` (Images API v3 — may be restricted, see below)
+Optional:
+- `API_TENNIS_PROXY` (recommended if your ISP blocks the host / “safe internet” filtering)
 
-### 2.2. Fetch upcoming fixtures (Sportradar Tennis)
+### 2.2. Fetch upcoming fixtures
 
 ```bash
-py -m src.data.fetch_upcoming_sportradar
+py -m src.data.fetch_upcoming_apitennis
 ```
 
 Writes: `data/processed/fixtures_upcoming.csv`
 
-### 2.3. Enrich fixtures with odds (OC Regular)
+### 2.3. Enrich fixtures with odds
 
 ```bash
-py -m src.data.fetch_odds_sportradar
+py -m src.data.fetch_odds_apitennis
 ```
 
 Notes:
-- Odds availability depends on your OC package/coverage. Not all fixtures will have odds.
-- Trial keys may hit **429 rate limits**; the fetcher implements backoff and skips days safely.
+- Odds availability depends on API-Tennis coverage. Not all fixtures will have odds.
+- You can bound runtime with `API_TENNIS_ODDS_MAX_ROWS` for faster public refresh cycles.
 
-### 2.4. Player images / tournament logos (Images API v3)
+### 2.4. Player logos (download + cache)
 
 ```bash
-py -m src.data.fetch_player_images_sportradar
-py -m src.data.fetch_tournament_logos_sportradar
+py -m src.data.fetch_player_images_apitennis
 ```
 
-If your key or plan is not entitled for Images API, you may see **403 Authentication Error**.
-The UI is still usable thanks to a built-in offline **avatar placeholder** fallback.
+Logos are downloaded from the logo URLs returned by API-Tennis fixtures and cached under `assets/players/`.
+The UI also works without images thanks to an offline avatar placeholder fallback.
 
 ---
 

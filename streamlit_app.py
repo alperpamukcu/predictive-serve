@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import html
 import textwrap
+import time
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -340,6 +343,31 @@ def render_site_header(t: Dict[str, str]) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+def _run_refresh_pipeline() -> Tuple[bool, str]:
+    """
+    Server-side refresh only. Never expose keys to the client.
+    Returns (ok, combined_output).
+    """
+    cmds = [
+        [sys.executable, "-m", "src.data.fetch_upcoming_apitennis"],
+        [sys.executable, "-m", "src.data.fetch_odds_apitennis"],
+    ]
+    out: List[str] = []
+    for cmd in cmds:
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            out.append(f"$ {' '.join(cmd)}")
+            if p.stdout:
+                out.append(p.stdout.strip())
+            if p.stderr:
+                out.append(p.stderr.strip())
+            if p.returncode != 0:
+                return False, "\n".join([x for x in out if x])
+        except Exception as e:
+            out.append(str(e))
+            return False, "\n".join([x for x in out if x])
+    return True, "\n".join([x for x in out if x])
 
 
 # =========================
@@ -1573,6 +1601,39 @@ with tab_matches:
 # =========================
 with tab_upcoming:
     st.markdown("<div class='ps-card'><div class='ps-title'>Upcoming Matches</div></div>", unsafe_allow_html=True)
+
+    # Refresh controls (server-side only) + cooldown to protect rate limits.
+    # Do NOT require secrets.toml. Read from env; fall back to 120s.
+    try:
+        from src.utils.env import getenv_int  # local import to avoid circulars
+
+        cooldown_s = int(getenv_int("REFRESH_COOLDOWN_S", 120))
+    except Exception:
+        cooldown_s = 120
+    cooldown_s = max(30, min(cooldown_s, 3600))
+    last_ts = float(st.session_state.get("last_refresh_ts", 0.0) or 0.0)
+    now_ts = time.time()
+    remaining = max(0, int(last_ts + cooldown_s - now_ts))
+
+    with st.expander("Refresh data (server-side)", expanded=False):
+        st.caption(
+            "Runs Sportradar fetchers on the server, then reloads the fixtures file. "
+            "Use sparingly to avoid rate limits."
+        )
+        can_click = remaining == 0
+        btn_label = "Refresh now" if can_click else f"Refresh now (cooldown {remaining}s)"
+        if st.button(btn_label, disabled=not can_click, use_container_width=True, key="refresh_now"):
+            st.session_state["last_refresh_ts"] = time.time()
+            with st.spinner("Refreshing upcoming fixtures + odds..."):
+                ok, logs = _run_refresh_pipeline()
+            # Reload cached datasets
+            st.cache_data.clear()
+            if ok:
+                st.success("Refresh completed.")
+            else:
+                st.warning("Refresh finished with warnings/errors. The UI will still load the latest available files.")
+            if logs:
+                st.code(logs, language="text")
 
     # Load artifacts + history once here (cache handles speed)
     history_df, _history_path = load_history()

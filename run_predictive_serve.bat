@@ -150,22 +150,22 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [INFO] Fetching upcoming fixtures (Sportradar) ...
-py -m src.data.fetch_upcoming_sportradar
+echo [INFO] Fetching upcoming fixtures (API-Tennis) ...
+py -m src.data.fetch_upcoming_apitennis
 if %errorlevel% neq 0 (
     echo [WARN] Upcoming fixtures fetch failed. Upcoming tab will show example or be empty.
 )
 
 echo.
-echo [INFO] Enriching upcoming fixtures with odds (Sportradar, optional) ...
-py -m src.data.fetch_odds_sportradar
+echo [INFO] Enriching upcoming fixtures with odds (API-Tennis, optional) ...
+py -m src.data.fetch_odds_apitennis
 if %errorlevel% neq 0 (
     echo [WARN] Odds enrichment failed. Upcoming tab will still work without odds.
 )
 
 echo.
-echo [INFO] Downloading player images (Sportradar Images, optional) ...
-py -m src.data.fetch_player_images_sportradar
+echo [INFO] Downloading player images (API-Tennis logos, optional) ...
+py -m src.data.fetch_player_images_apitennis
 if %errorlevel% neq 0 (
     echo [WARN] Player image download failed. UI will still work without images.
 )
