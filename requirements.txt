@@ -7,3 +7,4 @@ streamlit
 matplotlib
 seaborn
 numpy
+python-dotenv

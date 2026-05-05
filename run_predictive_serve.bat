@@ -58,6 +58,16 @@ echo ==========================================
 echo.
 
 echo [2/5] Fetching raw match data (2000–2026) ...
+echo [INFO] Checking tennis-data.co.uk access (proxy/VPN) ...
+py -m src.data.check_tennisdata_access
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] tennis-data.co.uk access check failed.
+    echo         If this host is geo-restricted, set TEN_DATA_PROXY in .env
+    echo         Example: TEN_DATA_PROXY=http://user:pass@proxyhost:port
+    pause
+    exit /b 1
+)
 py -m src.data.fetch_data
 if %errorlevel% neq 0 (
     echo.
@@ -67,6 +77,11 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 echo [OK] Raw data fetched.
+echo.
+
+echo [INFO] (Optional) Sampling Sportradar historical for quality checks ...
+py -m src.data.fetch_historical_sportradar
+echo [INFO] Sportradar historical sampling finished (best effort).
 echo.
 
 echo [3/5] Preprocessing and cleaning ...
@@ -120,7 +135,7 @@ echo [OK] Feature datasets are ready.
 echo.
 
 echo [5/5] Training model and scoring all matches ...
-py -m src.models.train_logreg
+py -m src.models.train_best
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Model training failed.
@@ -135,6 +150,34 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo [INFO] Fetching upcoming fixtures (Sportradar) ...
+py -m src.data.fetch_upcoming_sportradar
+if %errorlevel% neq 0 (
+    echo [WARN] Upcoming fixtures fetch failed. Upcoming tab will show example or be empty.
+)
+
+echo.
+echo [INFO] Enriching upcoming fixtures with odds (Sportradar, optional) ...
+py -m src.data.fetch_odds_sportradar
+if %errorlevel% neq 0 (
+    echo [WARN] Odds enrichment failed. Upcoming tab will still work without odds.
+)
+
+echo.
+echo [INFO] Downloading player images (Sportradar Images, optional) ...
+py -m src.data.fetch_player_images_sportradar
+if %errorlevel% neq 0 (
+    echo [WARN] Player image download failed. UI will still work without images.
+)
+
+echo.
+echo [INFO] Downloading tournament logos (Sportradar Images, optional) ...
+py -m src.data.fetch_tournament_logos_sportradar
+if %errorlevel% neq 0 (
+    echo [WARN] Tournament logo download failed. UI will still work without logos.
+)
+
+echo.
 echo ==========================================
 echo   Pipeline finished successfully
 echo ==========================================
@@ -146,7 +189,7 @@ echo.
 rem ------------------------------------------------------------
 rem 4) Launch Streamlit UI
 rem ------------------------------------------------------------
-py -m streamlit run streamlit_app.py
+py -m streamlit run streamlit_app.py --server.headless true
 
 echo.
 echo Streamlit app has been closed.

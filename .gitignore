@@ -32,9 +32,18 @@ env/
 *.ipynb_checkpoints
 
 # Data files (büyük dosyalar - opsiyonel, eğer git'e eklemek istemiyorsanız)
-# data/raw/
-# data/processed/
-# models/*.pkl
+# Keep small examples in git; ignore generated / large artifacts by default.
+data/raw/
+data/processed/
+data/cache/
+models/*.pkl
+models/*.joblib
+models/*.onnx
+models/*.pt
+
+# Allow tracked examples / templates
+!data/examples/
+!data/examples/**
 
 # Logs
 logs/
