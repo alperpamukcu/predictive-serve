@@ -42,9 +42,12 @@ from src.utils.player_meta import (
     PlayerMeta,
     age_from_bday,
     attach_country,
+    build_history_index,
+    canonical_parts,
     find_player_in_fixtures,
     is_doubles,
     load_cache as load_player_cache,
+    resolve_history_name,
     save_cache as save_player_cache,
 )
 
@@ -80,6 +83,19 @@ st.set_page_config(
 
 CSS = """
 <style>
+/* Twemoji web font for proper flag emoji rendering on Windows
+   (Segoe UI Emoji shows letter pairs like 'IT' instead of 🇮🇹).
+   Loaded from jsDelivr CDN; falls back to system emoji on slow networks. */
+@font-face {
+  font-family: "Twemoji Country Flags";
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E0073-E0074, U+E007F;
+  src: url('https://cdn.jsdelivr.net/npm/country-flag-emoji-polyfill@0.1.8/dist/TwemojiCountryFlags.woff2') format('woff2');
+  font-display: swap;
+}
+html, body, button, input, select, textarea, [class^="st-"], [class*=" st-"], .stMarkdown, .stApp {
+  font-family: "Twemoji Country Flags", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+}
+
 header[data-testid="stHeader"] { visibility: hidden; height: 0; }
 div[data-testid="stToolbar"] { visibility: hidden; height: 0; }
 #MainMenu, footer { visibility: hidden; }
@@ -652,13 +668,55 @@ def fetch_player_image_via_api(name: str) -> Optional[Path]:
     return None
 
 
-def player_label(name: str) -> str:
-    """Dropdown label for a player — prefixed with country flag if known."""
+def display_name(name: str) -> str:
+    """Use the API-Tennis full_name (e.g. ``Jannik Sinner``) when cached,
+    falling back to the history short form (``Sinner J.``)."""
     cache = _load_player_cache()
     meta = cache.get(name)
-    if meta and meta.flag and meta.flag != "🏳️":
-        return f"{meta.flag}  {name}"
+    if meta and meta.full_name:
+        return meta.full_name
     return name
+
+
+def player_label(name: str) -> str:
+    """Dropdown label — flag + full name when metadata is cached."""
+    cache = _load_player_cache()
+    meta = cache.get(name)
+    flag = meta.flag if (meta and meta.flag and meta.flag != "🏳️") else ""
+    full = (meta.full_name if (meta and meta.full_name) else name)
+    return f"{flag}  {full}".strip()
+
+
+# ---------------------------------------------------------------------------
+# Bulk metadata prefetch (parallel + cached)
+# ---------------------------------------------------------------------------
+
+def prefetch_player_meta(names: List[str], max_workers: int = 6, progress_cb=None) -> int:
+    """
+    Run ``get_player_meta`` for each *names* entry that doesn't yet have a
+    cache entry. Returns the number of players newly resolved.
+    """
+    import concurrent.futures
+
+    cache = _load_player_cache()
+    todo = [n for n in names if n and n not in cache]
+    if not todo:
+        return 0
+
+    resolved = 0
+    total = len(todo)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(get_player_meta, n): n for n in todo}
+        for i, fut in enumerate(concurrent.futures.as_completed(futures), start=1):
+            try:
+                meta = fut.result()
+                if meta and not meta.not_found:
+                    resolved += 1
+            except Exception:
+                pass
+            if progress_cb:
+                progress_cb(i, total)
+    return resolved
 
 
 def player_image_html(name: str, size: int = 120) -> str:
@@ -1032,13 +1090,13 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
     show = pd.DataFrame({
         "Date": df["date"].dt.strftime("%Y-%m-%d"),
         "Surface": df["surface"],
-        "Player A": df["playerA"],
-        "Player B": df["playerB"],
-        "AI Pick": df["winner_pick"],
+        "Player A": df["playerA"].map(display_name),
+        "Player B": df["playerB"].map(display_name),
+        "AI Pick": df["winner_pick"].map(display_name),
         "Confidence": df["winner_prob"] * 100.0,
     })
     if actual_winner is not None:
-        show["Actual Winner"] = actual_winner
+        show["Actual Winner"] = pd.Series(actual_winner, index=df.index).map(display_name)
         show["Result"] = np.where(correct_mask, "✓", "✗")
 
     if correct_mask is not None:
@@ -1187,6 +1245,15 @@ def _score_fixtures(fix_df: pd.DataFrame, history_df: pd.DataFrame) -> pd.DataFr
     return out
 
 
+@st.cache_data(show_spinner=False)
+def _history_player_index(history_df: pd.DataFrame) -> Tuple[dict, dict, list]:
+    if history_df.empty:
+        return {}, {}, []
+    names = pd.concat([history_df["playerA"], history_df["playerB"]]).dropna().astype(str).unique().tolist()
+    by_init_sur, by_surname = build_history_index(names)
+    return by_init_sur, by_surname, names
+
+
 def tab_upcoming(history_df: pd.DataFrame) -> None:
     st.markdown("<div class='ps-section-title'>Upcoming Fixtures</div>", unsafe_allow_html=True)
 
@@ -1195,7 +1262,6 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
     has_key = _api_key() is not None
 
     if has_real:
-        # show only future
         real = real.copy()
         real["date"] = pd.to_datetime(real["date"], errors="coerce")
         real = real.dropna(subset=["date", "playerA", "playerB", "surface"])
@@ -1203,7 +1269,7 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
         if real.empty:
             has_real = False
 
-    # Toolbar: API key status + refresh
+    # Toolbar
     bar1, bar2 = st.columns([3, 1.6])
     with bar1:
         if has_real:
@@ -1214,10 +1280,7 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
             st.caption("API key detected — click the refresh button to pull live ATP fixtures.")
         else:
             st.markdown('<span class="demo-pill">demo data &middot; no api key</span>', unsafe_allow_html=True)
-            st.caption(
-                "Create a `.env` file in the project root with "
-                "`API_TENNIS_KEY=<your key>` to enable live fixtures."
-            )
+            st.caption("Set API_TENNIS_KEY in .env to enable live fixtures.")
     with bar2:
         disabled = not has_key
         if st.button("Refresh fixtures from API", key="u_refresh", disabled=disabled, width="stretch"):
@@ -1232,40 +1295,53 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
                 st.code(log_text or "(empty)", language="text")
             st.rerun()
 
-    # Choose data source
-    if has_real:
-        fix = real
-    else:
-        fix = synth_fixtures(history_df)
-
+    fix = real if has_real else synth_fixtures(history_df)
     if fix.empty:
         st.markdown('<div class="empty-state">Could not generate any fixtures (history dataset empty).</div>', unsafe_allow_html=True)
         return
 
-    available_days = sorted(fix["date"].dt.date.unique().tolist())
-    day_labels = [d.strftime("%a %b %d, %Y") for d in available_days]
+    # Drop doubles (we never trained on doubles), then resolve API-style names
+    # ("J. Sinner") to history-style ones ("Sinner J.") so the model finds the
+    # right snapshots. Anything we can't resolve is skipped — those are the
+    # 50% predictions the user was seeing.
+    by_init_sur, by_surname, _hist_names = _history_player_index(history_df)
+    fix = fix.copy()
+    fix = fix[~fix["playerA"].astype(str).map(is_doubles)]
+    fix = fix[~fix["playerB"].astype(str).map(is_doubles)]
+    fix["playerA_resolved"] = fix["playerA"].apply(lambda n: resolve_history_name(str(n), by_init_sur, by_surname))
+    fix["playerB_resolved"] = fix["playerB"].apply(lambda n: resolve_history_name(str(n), by_init_sur, by_surname))
+    n_before = len(fix)
+    fix = fix.dropna(subset=["playerA_resolved", "playerB_resolved"]).copy()
+    n_after = len(fix)
+    fix["playerA"] = fix["playerA_resolved"]
+    fix["playerB"] = fix["playerB_resolved"]
+    fix = fix.drop(columns=["playerA_resolved", "playerB_resolved"])
 
-    f1, f2, f3, f4 = st.columns([1.6, 2, 2, 1.2])
+    # Default = today + tomorrow only (fast and the only window worth showing
+    # most of the time).
+    today = pd.Timestamp.today().normalize()
+    horizon = today + pd.Timedelta(days=2)
+
+    f1, f2, f3 = st.columns([1.4, 2.4, 1.4])
     with f1:
-        day_choice = st.selectbox("Day", ["All days"] + day_labels, index=0, key="u_day")
+        days_ahead = st.slider("Days ahead", 1, 7, 2, key="u_days_ahead")
     with f2:
         tour_opts = all_tournaments(fix)
-        sel_tours = st.multiselect("Tournament", tour_opts, default=[], key="u_tours")
+        sel_tours = st.multiselect("Tournament filter (optional)", tour_opts, default=[], key="u_tours")
     with f3:
-        surf_opts = sorted(fix["surface"].dropna().unique().tolist())
-        sel_surfaces = st.multiselect("Surface", surf_opts, default=surf_opts, key="u_surfaces")
-    with f4:
-        min_conf = st.slider("Min confidence", 0.50, 0.95, 0.55, 0.01, key="u_minconf")
+        min_conf = st.slider("Min confidence", 0.50, 0.95, 0.60, 0.01, key="u_minconf")
 
-    if day_choice != "All days":
-        idx = day_labels.index(day_choice)
-        fix = fix[fix["date"].dt.date == available_days[idx]]
+    horizon = today + pd.Timedelta(days=days_ahead)
+    fix = fix[(fix["date"] >= today) & (fix["date"] < horizon)]
     if sel_tours:
         fix = fix[fix["tournament"].isin(sel_tours)]
-    if sel_surfaces:
-        fix = fix[fix["surface"].isin(sel_surfaces)]
     if fix.empty:
-        st.markdown('<div class="empty-state">No fixtures match the current filters.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="empty-state">No singles fixtures from our trained roster in this window. '
+            'Try expanding the day count or check back later.</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"After resolution: {n_after:,} fixtures from our roster (raw fixtures: {n_before:,}).")
         return
 
     sc = _score_fixtures(fix, history_df)
@@ -1279,7 +1355,8 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
     sc = sc[sc["winner_prob"] >= min_conf].sort_values(["date", "winner_prob"], ascending=[True, False])
 
     st.markdown(
-        f"<div class='ps-section-title'>{len(sc):,} matches scored</div>",
+        f"<div class='ps-section-title'>{len(sc):,} matches scored &middot; "
+        f"<span style='color:var(--muted);font-weight:500;'>filtered to our trained roster ({n_after:,} of {n_before:,} singles)</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -1304,16 +1381,20 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
                 meta_bits.append(str(r["round"]))
             meta = " · ".join(meta_bits)
 
+            pa_disp = display_name(str(r["playerA"]))
+            pb_disp = display_name(str(r["playerB"]))
+            pick_disp = display_name(str(r["winner_pick"]))
+
             st.markdown(
                 f"""
                 <div class="match-card">
                   <div>
                     <div class="meta">{h(meta)}</div>
-                    <div class="name">{h(str(r['playerA']))} <span style="opacity:.5;font-weight:500;">vs</span> {h(str(r['playerB']))}</div>
+                    <div class="name">{h(pa_disp)} <span style="opacity:.5;font-weight:500;">vs</span> {h(pb_disp)}</div>
                   </div>
                   <div class="center">
                     <div class="vs">AI PICK</div>
-                    <div class="name" style="margin-top:4px;">{h(str(r['winner_pick']))}</div>
+                    <div class="name" style="margin-top:4px;">{h(pick_disp)}</div>
                     <div class="meta">{confidence_label(float(r['winner_prob']))} confidence</div>
                   </div>
                   <div class="right">
@@ -1460,7 +1541,7 @@ def tab_players(history_df: pd.DataFrame) -> None:
 
     has_local_img = find_image(ASSETS_DIR / "players" / slugify(player)) is not None
     api_present = _api_key() is not None
-    img_cols = st.columns([1.6, 1.4, 4])
+    img_cols = st.columns([1.6, 1.4, 2, 1.4])
     with img_cols[0]:
         if api_present:
             if st.button("Fetch live photo + metadata", key="p_fetch_img", width="stretch"):
@@ -1486,6 +1567,21 @@ def tab_players(history_df: pd.DataFrame) -> None:
                     st.rerun()
                 except Exception:
                     pass
+    with img_cols[2]:
+        if api_present:
+            if st.button("Prefetch top 100 active players", key="p_bulk", width="stretch"):
+                top_names = list(directory.head(100)["player"])
+                progress = st.progress(0.0, text="Fetching metadata...")
+                done = {"i": 0}
+
+                def _cb(i, total):
+                    done["i"] = i
+                    progress.progress(i / max(1, total), text=f"{i} / {total}")
+
+                resolved = prefetch_player_meta(top_names, max_workers=8, progress_cb=_cb)
+                progress.empty()
+                st.success(f"Resolved {resolved} new players (cached for next runs).")
+                st.rerun()
 
     tiles = (
         _kpi("Matches", f"{total:,}")
@@ -1868,6 +1964,7 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
     lb["Win rate"] = lb["Win rate"] * 100
     for c in ("Wins", "Losses", "Matches"):
         lb[c] = lb[c].astype(int)
+    lb["Player"] = lb["Player"].map(display_name)
 
     st.dataframe(
         lb[["Rank", "Player", "Matches", "Wins", "Losses", "Win rate"]],

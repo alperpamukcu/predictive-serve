@@ -189,3 +189,63 @@ def find_player_in_fixtures(
                 logo = (ev.get(lf) or "").strip() or None
                 return key_int, api_name, logo
     return None, None, None
+
+
+# ---------------------------------------------------------------------------
+# Cross-source name resolution (API ↔ history)
+# ---------------------------------------------------------------------------
+
+def build_history_index(history_names: Iterable[str]) -> tuple[dict, dict]:
+    """Build two lookup maps for fast resolution:
+        - by_init_sur: (initial, surname) -> history_name
+        - by_surname:  surname -> history_name (first occurrence wins)
+    """
+    by_init_sur: dict[tuple[Optional[str], str], str] = {}
+    by_surname: dict[str, str] = {}
+    for n in history_names:
+        if not isinstance(n, str) or not n.strip():
+            continue
+        i, sur = canonical_parts(n)
+        if not sur:
+            continue
+        key = (i, sur)
+        by_init_sur.setdefault(key, n)
+        by_surname.setdefault(sur, n)
+    return by_init_sur, by_surname
+
+
+def resolve_history_name(
+    api_name: str,
+    by_init_sur: dict,
+    by_surname: dict,
+) -> Optional[str]:
+    """Map an API-style player name (``J. Sinner``) to its history-style
+    counterpart (``Sinner J.``). Returns None when no plausible match exists.
+    """
+    if not api_name or is_doubles(api_name):
+        return None
+    i, sur = canonical_parts(api_name)
+    if not sur:
+        return None
+
+    # 1) Exact (initial, surname)
+    if (i, sur) in by_init_sur:
+        return by_init_sur[(i, sur)]
+
+    # 2) Same surname, no initial in history
+    if (None, sur) in by_init_sur:
+        return by_init_sur[(None, sur)]
+
+    # 3) Surname-only fallback (any initial)
+    if sur in by_surname:
+        return by_surname[sur]
+
+    # 4) Try first surname token only ("bautista agut" -> "bautista")
+    if " " in sur:
+        first_token = sur.split()[0]
+        if (i, first_token) in by_init_sur:
+            return by_init_sur[(i, first_token)]
+        if first_token in by_surname:
+            return by_surname[first_token]
+
+    return None
