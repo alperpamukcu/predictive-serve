@@ -76,7 +76,7 @@ except Exception:  # pragma: no cover
 
 st.set_page_config(
     page_title="Predictive Serve",
-    page_icon="🎾",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={"Get Help": None, "Report a bug": None, "About": None},
@@ -103,13 +103,13 @@ div[data-testid="stToolbar"] { visibility: hidden; height: 0; }
 #MainMenu, footer { visibility: hidden; }
 
 :root {
-  --bg: #131a26;
-  --bg-2: #1a2334;
+  --bg: #1c2333;
+  --bg-2: #232b3d;
   --surface: rgba(255,255,255,0.05);
   --surface-2: rgba(255,255,255,0.085);
   --surface-strong: rgba(255,255,255,0.12);
-  --line: rgba(255,255,255,0.12);
-  --line-strong: rgba(255,255,255,0.22);
+  --line: rgba(255,255,255,0.10);
+  --line-strong: rgba(255,255,255,0.20);
   --text: #f1f4fa;
   --muted: rgba(241,244,250,0.78);
   --soft-muted: rgba(241,244,250,0.55);
@@ -126,13 +126,33 @@ div[data-testid="stToolbar"] { visibility: hidden; height: 0; }
 
 .stApp {
   background:
-    radial-gradient(1100px 600px at 12% -10%, rgba(106,169,255,0.10), transparent 55%),
-    radial-gradient(900px 520px at 92% -10%, rgba(156,135,255,0.08), transparent 55%),
-    radial-gradient(800px 600px at 50% 110%, rgba(255,141,99,0.04), transparent 50%),
+    radial-gradient(1200px 700px at 14% -10%, rgba(106,169,255,0.08), transparent 55%),
+    radial-gradient(900px 540px at 90% -8%, rgba(156,135,255,0.06), transparent 55%),
+    radial-gradient(800px 600px at 50% 115%, rgba(255,141,99,0.03), transparent 50%),
     linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
 }
+
+/* Scrollbars — slim, subtle, theme-aware */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(106,169,255,0.32), rgba(156,135,255,0.32));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(106,169,255,0.55), rgba(156,135,255,0.55));
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+*::-webkit-scrollbar-corner { background: transparent; }
 
 /* Centre the column and give it a sane max-width */
 .block-container {
@@ -274,11 +294,34 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 
 /* Buttons (default) */
 .stButton > button {
-  border-radius:10px !important; border:1px solid var(--line) !important;
-  background: var(--surface) !important; color: var(--text) !important;
-  font-weight:600 !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--line) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.005em !important;
+  transition: all 0.18s ease !important;
 }
-.stButton > button:hover { border-color: var(--line-strong) !important; background: var(--surface-2) !important; }
+.stButton > button:hover {
+  border-color: var(--line-strong) !important;
+  background: var(--surface-2) !important;
+  transform: translateY(-1px);
+}
+/* Buttons that lead with 👤 are player chips — blue tint */
+.stButton > button:has(> div > p:first-child[data-testid="stMarkdownContainer"]),
+.stButton > button p:first-child {
+  font-size: 0.92rem !important;
+}
+.stButton > button[data-testid] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+/* Tag-style nav chips: target buttons by content via attribute hack — uses
+   :has() which is supported in Chromium >=105. Also fall back to a
+   generic visual treatment for everyone else. */
+.stButton:has(button:has-text("👤")) > button { /* not all browsers */ }
+
 
 /* Dataframe — strong borders, larger header, bolder body */
 [data-testid="stDataFrame"] {
@@ -299,7 +342,43 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 [data-testid="stDataFrame"] tbody tr td { color: var(--text) !important; font-size: 0.92rem !important; }
 [data-testid="stDataFrame"] tbody tr:hover td { background: rgba(106,169,255,0.05) !important; }
 
-/* Match row card */
+/* Upcoming match card — mirrors the What-if visual language */
+.up-card {
+  padding: 16px 20px; margin-bottom: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+.up-meta {
+  color: var(--muted); font-size: 0.84rem; margin-bottom: 12px;
+}
+.up-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1.4fr;
+  gap: 18px; align-items: center;
+}
+.up-side { display: flex; gap: 14px; align-items: center; }
+.up-side-right { flex-direction: row-reverse; justify-content: flex-start; }
+.up-side-right .up-info-right { text-align: right; }
+.up-photo { flex: 0 0 auto; }
+.up-photo > div, .up-photo > img {
+  width: 72px !important; height: 72px !important; border-radius: 50%;
+  border: 2px solid var(--line-strong); background: var(--surface);
+}
+.up-info { flex: 1 1 auto; min-width: 0; }
+.up-name { color: #fff; font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; line-height: 1.15; }
+.up-prob { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+.up-prob b { color: var(--text); font-weight: 700; }
+.up-pick {
+  text-align: center; padding: 10px 12px;
+  border-left: 1px dashed rgba(255,255,255,0.10);
+  border-right: 1px dashed rgba(255,255,255,0.10);
+}
+.up-pick-label { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; }
+.up-pick-name { color: #fff; font-weight: 800; font-size: 1.15rem; margin-top: 4px; letter-spacing: -0.01em; }
+.up-pick-conf { color: var(--accent); font-size: 0.85rem; margin-top: 4px; font-weight: 600; }
+
+/* Match row card (legacy, used by What-if) */
 .match-card {
   display:grid; grid-template-columns: 1.6fr 1fr 1fr;
   gap:14px; align-items:center;
@@ -593,18 +672,58 @@ def _save_player_cache(cache: dict) -> None:
     save_player_cache(PLAYER_META_DIR, cache)
 
 
-def get_player_meta(name: str, *, force_refresh: bool = False) -> PlayerMeta:
+def _download_photo(name: str, logo_url: Optional[str]) -> bool:
+    if not logo_url or not logo_url.startswith("http"):
+        return False
+    out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        r = requests.get(logo_url, timeout=20)
+        r.raise_for_status()
+        out.write_bytes(r.content)
+        return True
+    except Exception:
+        return False
+
+
+def get_player_meta(name: str) -> PlayerMeta:
     """
-    Resolve a history-style player name into a PlayerMeta record using the
-    cache first, then API-Tennis if a key is configured. Always returns a
-    PlayerMeta; check ``not_found`` and missing fields to decide what to show.
+    Idempotent metadata lookup with **enrichment-first** semantics:
+      1) Returns the cached entry if present (never overwrites known fields).
+      2) For new names, tries fixtures (gets player_key + photo URL in one go).
+      3) For cached entries with a key but no local photo, downloads the photo
+         lazily on first read.
+    A retired player whose entry has only ``full_name + country`` keeps that
+    metadata even if a later live lookup can't find their key.
     """
     cache = _load_player_cache()
-    if not force_refresh and name in cache:
-        cached = cache[name]
-        if cached.fetched_at:
-            return cached
+    meta = cache.get(name)
 
+    # 1) Already in cache — return as-is, but lazily download missing photo.
+    if meta is not None:
+        if meta.player_key and not find_image(ASSETS_DIR / "players" / slugify(name)):
+            if meta.logo_url:
+                _download_photo(name, meta.logo_url)
+            elif ApiTennisConfig is not None and get_players is not None and _api_key():
+                try:
+                    cfg = ApiTennisConfig(api_key=_api_key(), cache_ttl_s=86400)
+                    rec = get_players(cfg, meta.player_key)
+                    logo = rec.get("player_logo")
+                    bday = rec.get("player_bday")
+                    if logo and not meta.logo_url:
+                        meta.logo_url = logo
+                    if bday and not meta.birthday:
+                        meta.birthday = bday
+                        meta.age = age_from_bday(bday)
+                    cache[name] = meta
+                    _save_player_cache(cache)
+                    if logo:
+                        _download_photo(name, logo)
+                except Exception:
+                    pass
+        return meta
+
+    # 2) Brand new lookup.
     meta = PlayerMeta(name=name)
 
     if ApiTennisConfig is None or get_players is None or _api_key() is None:
@@ -637,37 +756,9 @@ def get_player_meta(name: str, *, force_refresh: bool = False) -> PlayerMeta:
     cache[name] = meta
     _save_player_cache(cache)
 
-    # Persist photo to the assets cache
-    if meta.logo_url and meta.logo_url.startswith("http"):
-        out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
-        if force_refresh or not find_image(ASSETS_DIR / "players" / slugify(name)):
-            out.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                r = requests.get(meta.logo_url, timeout=20)
-                r.raise_for_status()
-                out.write_bytes(r.content)
-            except Exception:
-                pass
-
+    if meta.logo_url:
+        _download_photo(name, meta.logo_url)
     return meta
-
-
-def fetch_player_image_via_api(name: str) -> Optional[Path]:
-    meta = get_player_meta(name, force_refresh=True)
-    if meta and meta.logo_url:
-        path = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
-        if path.exists():
-            return path
-        # download is performed inside get_player_meta — try again if cache hit before
-        try:
-            r = requests.get(meta.logo_url, timeout=20)
-            r.raise_for_status()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(r.content)
-            return path
-        except Exception:
-            return None
-    return None
 
 
 def display_name(name: str) -> str:
@@ -1033,34 +1124,39 @@ def render_top_nav_buttons() -> None:
 # =============================================================================
 
 def _render_action_buttons(prefix: str, player_a: Optional[str], player_b: Optional[str], tournament: Optional[str]) -> None:
-    """Buttons that navigate to a profile based on a selected row."""
-    cols = st.columns([1, 1, 1, 3])
+    """Inline jump buttons. Player chips use a blue-accent style, the tournament
+    chip uses a warm-accent style so the two are visually distinct at a glance.
+    No "Open:" prefix — the icon does the work."""
+    cols = st.columns([1, 1, 1.5, 2.5])
     with cols[0]:
         if player_a:
             st.button(
-                f"Open: {player_a}",
+                f"👤 {display_name(player_a)}",
                 key=f"{prefix}_pa",
                 on_click=navigate_to_player,
                 args=(player_a,),
                 width="stretch",
+                help="Open player profile",
             )
     with cols[1]:
         if player_b:
             st.button(
-                f"Open: {player_b}",
+                f"👤 {display_name(player_b)}",
                 key=f"{prefix}_pb",
                 on_click=navigate_to_player,
                 args=(player_b,),
                 width="stretch",
+                help="Open player profile",
             )
     with cols[2]:
         if tournament:
             st.button(
-                f"Open: {tournament}",
+                f"🏆 {tournament}",
                 key=f"{prefix}_t",
                 on_click=navigate_to_tournament,
                 args=(tournament,),
                 width="stretch",
+                help="Open tournament profile",
             )
 
 
@@ -1481,24 +1577,45 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
                 meta_bits.append(str(r["round"]))
             meta = " · ".join(meta_bits)
 
-            pa_disp = display_name(str(r["playerA"]))
-            pb_disp = display_name(str(r["playerB"]))
-            pick_disp = display_name(str(r["winner_pick"]))
+            pa = str(r["playerA"])
+            pb = str(r["playerB"])
+            pick = str(r["winner_pick"])
+            pa_disp = display_name(pa)
+            pb_disp = display_name(pb)
+            pick_disp = display_name(pick)
+            p_a = float(r["p_model"])
+            p_b = 1.0 - p_a
+            bar_a = int(round(p_a * 100))
+            bar_b = 100 - bar_a
+            img_a = player_image_html(pa, size=72)
+            img_b = player_image_html(pb, size=72)
 
             st.markdown(
                 f"""
-                <div class="match-card">
-                  <div>
-                    <div class="meta">{h(meta)}</div>
-                    <div class="name">{h(pa_disp)} <span style="opacity:.5;font-weight:500;">vs</span> {h(pb_disp)}</div>
-                  </div>
-                  <div class="center">
-                    <div class="vs">AI PICK</div>
-                    <div class="name" style="margin-top:4px;">{h(pick_disp)}</div>
-                    <div class="meta">{confidence_label(float(r['winner_prob']))} confidence</div>
-                  </div>
-                  <div class="right">
-                    <div class="win-pill">{r['winner_prob']*100:.1f}%</div>
+                <div class="up-card">
+                  <div class="up-meta">{h(meta)}</div>
+                  <div class="up-row">
+                    <div class="up-side">
+                      <div class="up-photo">{img_a}</div>
+                      <div class="up-info">
+                        <div class="up-name">{h(pa_disp)}</div>
+                        <div class="up-prob">p(A wins) = <b>{p_a*100:.1f}%</b></div>
+                        <div class="bar-bg"><div class="bar-fill bar-a" style="width:{bar_a}%;"></div></div>
+                      </div>
+                    </div>
+                    <div class="up-pick">
+                      <div class="up-pick-label">AI PICK</div>
+                      <div class="up-pick-name">{h(pick_disp)}</div>
+                      <div class="up-pick-conf">{confidence_label(float(r['winner_prob']))} · {r['winner_prob']*100:.1f}%</div>
+                    </div>
+                    <div class="up-side up-side-right">
+                      <div class="up-info up-info-right">
+                        <div class="up-name">{h(pb_disp)}</div>
+                        <div class="up-prob">p(B wins) = <b>{p_b*100:.1f}%</b></div>
+                        <div class="bar-bg"><div class="bar-fill bar-b" style="width:{bar_b}%;"></div></div>
+                      </div>
+                      <div class="up-photo">{img_b}</div>
+                    </div>
                   </div>
                 </div>
                 """,
@@ -1507,8 +1624,8 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
             uid = f"u_{day}_{i}"
             _render_action_buttons(
                 prefix=uid,
-                player_a=str(r["playerA"]),
-                player_b=str(r["playerB"]),
+                player_a=pa,
+                player_b=pb,
                 tournament=str(r.get("tournament") or "") or None,
             )
 
@@ -1624,7 +1741,7 @@ def tab_players(history_df: pd.DataFrame) -> None:
         if meta and meta.flag and meta.flag != "🏳️"
         else ""
     )
-    display_name = (meta.full_name or player) if meta else player
+    profile_name = (meta.full_name or player) if meta else player
 
     chips: list[str] = []
     if meta and meta.country:
@@ -1641,7 +1758,7 @@ def tab_players(history_df: pd.DataFrame) -> None:
         <div class="profile-header">
           <div class="avatar">{img_html}</div>
           <div class="meta-block">
-            <div class="name">{flag_html}{h(display_name)}</div>
+            <div class="name">{flag_html}{h(profile_name)}</div>
             <div class="sub">{wins:,} wins · {losses:,} losses</div>
             <div class="meta-chips">{''.join(chips)}</div>
           </div>
@@ -1650,51 +1767,9 @@ def tab_players(history_df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
-    has_local_img = find_image(ASSETS_DIR / "players" / slugify(player)) is not None
-    api_present = _api_key() is not None
-    img_cols = st.columns([1.6, 1.4, 2, 1.4])
-    with img_cols[0]:
-        if api_present:
-            if st.button("Fetch live photo + metadata", key="p_fetch_img", width="stretch"):
-                with st.spinner("Calling API-Tennis..."):
-                    saved = fetch_player_image_via_api(player)
-                if saved is not None:
-                    st.success("Photo + metadata updated.")
-                    st.rerun()
-                else:
-                    st.warning(
-                        "No matching player in current API-Tennis fixtures (player may "
-                        "not have an active match in the last 14 days)."
-                    )
-        else:
-            st.button("Fetch live photo + metadata", key="p_fetch_img_disabled", disabled=True, width="stretch")
-    with img_cols[1]:
-        if has_local_img:
-            if st.button("Reset to avatar", key="p_reset_img", width="stretch"):
-                try:
-                    img_path = find_image(ASSETS_DIR / "players" / slugify(player))
-                    if img_path and img_path.exists():
-                        img_path.unlink()
-                    st.rerun()
-                except Exception:
-                    pass
-    with img_cols[2]:
-        if api_present:
-            if st.button("Sync ATP roster (full coverage)", key="p_bulk", width="stretch"):
-                names_to_resolve = list(directory["player"])
-                progress = st.progress(0.0, text="Pulling ATP standings + photos...")
-
-                def _cb(i, total):
-                    progress.progress(i / max(1, total), text=f"Photo {i} / {total}")
-
-                with st.spinner("One-shot ATP standings call (covers ~2000 players)..."):
-                    resolved, attempted = prefetch_via_standings(names_to_resolve, progress_cb=_cb)
-                progress.empty()
-                st.success(
-                    f"Synced ATP roster: {resolved:,} new players resolved "
-                    f"(out of {attempted:,} candidates). Photos cached locally."
-                )
-                st.rerun()
+    # No manual buttons — metadata + photos auto-resolve on profile open
+    # (and are batch-refreshed nightly by the GitHub Actions cron). See
+    # src/data/fetch_player_roster.py + fetch_player_photos.py.
 
     tiles = (
         _kpi("Matches", f"{total:,}")

@@ -68,6 +68,7 @@ jobs:
         if: ${{ env.API_TENNIS_KEY != '' }}
         run: |
           python -m src.data.fetch_player_roster || true
+          python -m src.data.fetch_player_photos || true
 
       - name: Commit refreshed artifacts
         run: |
@@ -82,6 +83,7 @@ jobs:
             models/imputer_final.pkl \
             models/feature_columns.txt \
             models/metrics.json \
+            assets/players \
             2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No artifact changes to commit."

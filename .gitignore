@@ -64,10 +64,9 @@ models/*.pt
 !models/feature_columns.txt
 !models/metrics.json
 
-# Assets: keep placeholders, ignore downloaded binaries
-assets/players/*
+# Assets — track downloaded player photos so the deployed app shows them
+# without needing API access. Tournament logos stay ignored for now.
 assets/tournaments/*
-!assets/players/.gitkeep
 !assets/tournaments/.gitkeep
 
 # Logs
