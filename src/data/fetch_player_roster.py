@@ -55,18 +55,19 @@ def main() -> int:
     if not rows:
         return 0
 
-    # Build (initial, surname) and surname-only indexes from standings
+    # Build a strict (initial, surname) index. We deliberately DO NOT fall
+    # back to surname-only matches because that maps 'Murray A.' (Andy, who
+    # retired and isn't in current ATP standings) to whichever surviving
+    # 'Murray' surfaces first.
     by_init_sur: dict[tuple, dict] = {}
-    by_surname: dict[str, dict] = {}
     for r in rows:
         full = (r.get("player") or "").strip()
         if not full:
             continue
         ci = canonical_parts(full)
-        if not ci[1]:
+        if not ci[1] or ci[0] is None:
             continue
         by_init_sur.setdefault(ci, r)
-        by_surname.setdefault(ci[1], r)
 
     cache_dir = DATA_DIR / "cache"
     cache = load_cache(cache_dir)
@@ -78,9 +79,9 @@ def main() -> int:
         if name in cache and cache[name].fetched_at and not cache[name].not_found:
             continue
         i, sur = canonical_parts(name)
-        if not sur:
+        if not sur or i is None:
             continue
-        row = by_init_sur.get((i, sur)) or by_init_sur.get((None, sur)) or by_surname.get(sur)
+        row = by_init_sur.get((i, sur))
         if not row:
             continue
         meta = PlayerMeta(name=name)

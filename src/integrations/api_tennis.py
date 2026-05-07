@@ -134,6 +134,16 @@ def get_standings(cfg: ApiTennisConfig, event_type: str = "ATP") -> List[Dict[st
     return res if isinstance(res, list) else []
 
 
+def get_livescore(cfg: ApiTennisConfig) -> List[Dict[str, Any]]:
+    """All matches currently in progress on api-tennis.com.
+
+    Returned events include scores, server, set scores under ``scores``,
+    plus the same player keys + logo URLs we get from get_fixtures."""
+    payload = _get(cfg, {"method": "get_livescore"})
+    res = payload.get("result") or []
+    return res if isinstance(res, list) else []
+
+
 def consensus_decimal_moneyline(odds_payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], int]:
     """
     Extract a consensus (median) Home/Away decimal price across books.
