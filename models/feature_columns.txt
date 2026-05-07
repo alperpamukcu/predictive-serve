@@ -30,13 +30,6 @@ is_quarter
 series_tier
 is_grand_slam
 is_bo5_match
-oddsA
-oddsB
-has_market
-pA_market
-pB_market
-p_diff
-logit_pA_market
 surface_Carpet
 surface_Clay
 surface_Grass

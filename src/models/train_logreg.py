@@ -1,33 +1,43 @@
 # src/models/train_logreg.py
+"""
+Baseline logistic-regression trainer with a strict no-market feature set
+and a proper train/val/test split.
+    train  : year < 2022
+    val    : 2022 <= year < 2025
+    test   : year >= 2025  (held-out — never tuned against)
+"""
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
+from typing import Tuple
 
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss, brier_score_loss, accuracy_score
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.utils.config import PROCESSED_DIR
-
-# PROCESSED_DIR = <PROJECT_ROOT>/data/processed
-# Buradan PROJECT_ROOT'a çıkıp models klasörünü tanımlıyoruz:
-MODELS_DIR = PROCESSED_DIR.parent.parent / "models"
+from src.utils.config import MODELS_DIR, PROCESSED_DIR
+from src.utils.feature_utils import select_model_features
 
 TRAIN_DATA_PATH = PROCESSED_DIR / "train_dataset.csv"
+METRICS_PATH = MODELS_DIR / "metrics.json"
 
 
-def train_logistic_regression() -> tuple[Path, Path, Path]:
-    """
-    Logistic Regression modelini eğitir, validation performansını yazar
-    ve modeli + imputer'ı + feature list'ini diske kaydeder.
+def _eval(y, p) -> dict:
+    return {
+        "n": int(len(y)),
+        "logloss": float(log_loss(y, p)),
+        "brier": float(brier_score_loss(y, p)),
+        "accuracy": float(accuracy_score(y, (p >= 0.5).astype(int))),
+    }
 
-    Dönüş:
-        (model_path, imputer_path, feature_columns_path)
-    """
+
+def train_logistic_regression() -> Tuple[Path, Path, Path]:
     if not TRAIN_DATA_PATH.exists():
         raise FileNotFoundError(f"Train dataset bulunamadı: {TRAIN_DATA_PATH}")
 
@@ -35,78 +45,62 @@ def train_logistic_regression() -> tuple[Path, Path, Path]:
     df = pd.read_csv(TRAIN_DATA_PATH)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Meta kolonlar (feature olmayanlar)
-    meta_cols = ["date", "surface", "playerA", "playerB", "y"]
+    feature_cols = select_model_features(list(df.columns), include_market=False)
+    print(f"[logreg] Feature count (no market): {len(feature_cols)}")
 
-    # Feature kolonları: meta olmayan tüm kolonlar
-    # CRITICAL: Market Odds kolonlarını (oddsA, oddsB, pA_market...) EĞİTİME DAHİL ETME!
-    # Aksi takdirde model sadece oranlara bakıyor (Data Leakage benzeri) ve Elo'yu görmezden geliyor.
-    exclude_cols = meta_cols + ["oddsA", "oddsB", "pA_market", "pB_market", "p_diff", "logit_pA_market"]
-    feature_cols = [c for c in df.columns if c not in exclude_cols]
-    print(f"[logreg] Toplam feature sayısı: {len(feature_cols)}")
+    yr = df["date"].dt.year
+    train_df = df[yr < 2022].copy()
+    val_df = df[(yr >= 2022) & (yr < 2025)].copy()
+    test_df = df[yr >= 2025].copy()
+    print(f"[logreg] Train={len(train_df):,} Val={len(val_df):,} Test={len(test_df):,}")
 
-    # Zaman bazlı train/validation ayrımı
-    train_df = df[df["date"].dt.year < 2022].copy()
-    val_df = df[df["date"].dt.year >= 2022].copy()
-
-    X_train = train_df[feature_cols]
-    y_train = train_df["y"]
-
-    X_val = val_df[feature_cols]
-    y_val = val_df["y"]
-
-    print(f"[logreg] Train shape: {X_train.shape}, Val shape: {X_val.shape}")
-
-    # Eksik değerleri median ile doldur
     imputer = SimpleImputer(strategy="median")
-    X_train_imp = imputer.fit_transform(X_train)
-    X_val_imp = imputer.transform(X_val)
+    X_train = imputer.fit_transform(train_df[feature_cols])
+    X_val = imputer.transform(val_df[feature_cols])
+    X_test = imputer.transform(test_df[feature_cols]) if len(test_df) else None
 
-    # Logistic Regression modeli (Pipeline içinde Scaler ile)
-    # Elo diff gibi feature'lar büyük (500-1000) olduğu için Scaling şart.
-    # Pipeline kullanınca inference tarafında kod değiştirmeye gerek kalmaz.
+    y_train = train_df["y"].astype(int).values
+    y_val = val_df["y"].astype(int).values
+    y_test = test_df["y"].astype(int).values if len(test_df) else None
+
     model = make_pipeline(
         StandardScaler(),
-        LogisticRegression(
-            penalty="l2",
-            C=1.0,
-            max_iter=1000,
-            n_jobs=-1,
-            solver="lbfgs",
-        )
+        LogisticRegression(penalty="l2", C=1.0, max_iter=2000, n_jobs=-1, solver="lbfgs"),
     )
+    print("[logreg] Training...")
+    model.fit(X_train, y_train)
 
-    print("[logreg] Model eğitiliyor...")
-    model.fit(X_train_imp, y_train)
+    p_val = model.predict_proba(X_val)[:, 1]
+    val_metrics = _eval(y_val, p_val)
+    print(f"[logreg] Val   {val_metrics}")
 
-    # Validation performansı
-    val_proba = model.predict_proba(X_val_imp)[:, 1]
+    test_metrics = None
+    if X_test is not None and y_test is not None and len(y_test) > 0:
+        p_test = model.predict_proba(X_test)[:, 1]
+        test_metrics = _eval(y_test, p_test)
+        print(f"[logreg] Test  {test_metrics}")
 
-    logloss_val = log_loss(y_val, val_proba)
-    brier_val = brier_score_loss(y_val, val_proba)
-    acc_val = accuracy_score(y_val, (val_proba >= 0.5).astype(int))
-
-    print(f"[logreg] Validation logloss : {logloss_val:.6f}")
-    print(f"[logreg] Validation brier   : {brier_val:.6f}")
-    print(f"[logreg] Validation accuracy: {acc_val:.6f}")
-
-    # MODELS_DIR altında kayıt
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
     model_path = MODELS_DIR / "logreg_final.pkl"
     imputer_path = MODELS_DIR / "imputer_final.pkl"
     feature_cols_path = MODELS_DIR / "feature_columns.txt"
 
     joblib.dump(model, model_path)
     joblib.dump(imputer, imputer_path)
+    feature_cols_path.write_text("\n".join(feature_cols) + "\n", encoding="utf-8")
 
-    with feature_cols_path.open("w", encoding="utf-8") as f:
-        for col in feature_cols:
-            f.write(col + "\n")
+    METRICS_PATH.write_text(
+        json.dumps(
+            {"model": "logreg", "validation": val_metrics, "test": test_metrics},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
-    print(f"[logreg] Model kaydedildi: {model_path}")
-    print(f"[logreg] Imputer kaydedildi: {imputer_path}")
-    print(f"[logreg] Feature listesi kaydedildi: {feature_cols_path}")
+    print(f"[logreg] Saved model -> {model_path}")
+    print(f"[logreg] Saved imputer -> {imputer_path}")
+    print(f"[logreg] Saved features -> {feature_cols_path}")
+    print(f"[logreg] Metrics -> {METRICS_PATH}")
 
     return model_path, imputer_path, feature_cols_path
 

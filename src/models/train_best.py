@@ -1,170 +1,91 @@
+"""
+Production trainer for Predictive Serve.
+
+Selects the best leakage-safe model (LogReg vs HistGradientBoosting), applies
+a calibration pass, evaluates on a held-out test split, and persists artifacts
+that downstream scripts (score_all_matches, streamlit_app, whatif) can load.
+
+Key rules:
+- Market-derived columns are NEVER used as model inputs. The "edge" between
+  model probability and market probability stays meaningful.
+- Time-aware splits: train < 2022, validation 2022-2024, test >= 2025.
+- Calibration uses a within-train slice (year == 2021) so val/test never
+  influence the calibrator.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.calibration import CalibratedClassifierCV
 
-from src.utils.config import PROCESSED_DIR
+from src.utils.config import MODELS_DIR, PROCESSED_DIR
+from src.utils.feature_utils import select_model_features
 
-
-MODELS_DIR = PROCESSED_DIR.parent.parent / "models"
 TRAIN_DATA_PATH = PROCESSED_DIR / "train_dataset.csv"
+METRICS_PATH = MODELS_DIR / "metrics.json"
+
+TRAIN_END_YEAR = 2022   # train: year < 2022
+VAL_END_YEAR = 2025     # val: 2022..2024 ;  test: >= 2025
+CALIB_YEAR = 2021       # within-train slice used as calibration set
 
 
-@dataclass(frozen=True)
+@dataclass
 class Metrics:
+    n: int
     logloss: float
     brier: float
-    acc: float
-    n: int
+    accuracy: float
+
+    def asdict(self) -> dict:
+        return asdict(self)
 
 
 def _eval(y: np.ndarray, p: np.ndarray) -> Metrics:
     return Metrics(
+        n=int(len(y)),
         logloss=float(log_loss(y, p)),
         brier=float(brier_score_loss(y, p)),
-        acc=float(accuracy_score(y, (p >= 0.5).astype(int))),
-        n=int(len(y)),
+        accuracy=float(accuracy_score(y, (p >= 0.5).astype(int))),
     )
 
 
-def _train_val_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    train_df = df[df["date"].dt.year < 2022].copy()
-    val_df = df[df["date"].dt.year >= 2022].copy()
-    return train_df, val_df
+    yr = df["date"].dt.year
+    train = df[yr < TRAIN_END_YEAR].copy()
+    val = df[(yr >= TRAIN_END_YEAR) & (yr < VAL_END_YEAR)].copy()
+    test = df[yr >= VAL_END_YEAR].copy()
+    return train, val, test
 
 
-def _train_calib_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Time-safe split inside train period:
-    - train_base: year < 2021
-    - calib:      year == 2021
-    """
-    df = df.copy()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    train_base = df[df["date"].dt.year < 2021].copy()
-    calib = df[df["date"].dt.year == 2021].copy()
-    return train_base, calib
-
-
-def _feature_cols(df: pd.DataFrame, include_market: bool) -> List[str]:
-    meta_cols = ["date", "surface", "playerA", "playerB", "y"]
-    if include_market:
-        exclude = meta_cols
-    else:
-        exclude = meta_cols + ["oddsA", "oddsB", "pA_market", "pB_market", "p_diff", "logit_pA_market", "has_market"]
-    return [c for c in df.columns if c not in exclude]
-
-
-def train_and_select() -> Tuple[Path, Path, Path]:
-    if not TRAIN_DATA_PATH.exists():
-        raise FileNotFoundError(f"Train dataset not found: {TRAIN_DATA_PATH}")
-
-    print(f"[best] Reading train dataset: {TRAIN_DATA_PATH}")
-    df = pd.read_csv(TRAIN_DATA_PATH, low_memory=False)
-    train_df, val_df = _train_val_split(df)
-    print(f"[best] Train rows={len(train_df):,} Val rows={len(val_df):,}")
-
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # --- Candidate 1: Logistic Regression (no market) ---
-    feat_nomarket = _feature_cols(df, include_market=False)
-    imp1 = SimpleImputer(strategy="median")
-    Xtr1 = imp1.fit_transform(train_df[feat_nomarket])
-    Xv1 = imp1.transform(val_df[feat_nomarket])
-    ytr = train_df["y"].astype(int).values
-    yv = val_df["y"].astype(int).values
-
-    lr = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(penalty="l2", C=1.0, max_iter=2000, n_jobs=-1, solver="lbfgs"),
-    )
-    lr.fit(Xtr1, ytr)
-    p1 = lr.predict_proba(Xv1)[:, 1]
-    m1 = _eval(yv, p1)
-    print(f"[best] LR(no-market) logloss={m1.logloss:.6f} brier={m1.brier:.6f} acc={m1.acc:.6f}")
-
-    # --- Candidate 2: HistGradientBoosting (no market) ---
-    hgb_grid = [
-        # (learning_rate, max_depth, max_leaf_nodes, min_samples_leaf, l2_regularization, max_iter)
+def _grid_hgb() -> List[HistGradientBoostingClassifier]:
+    grid = []
+    for lr_, md_, mln_, msl_, l2_, it_ in [
         (0.05, 6, 31, 50, 0.0, 400),
         (0.05, 4, 31, 50, 0.0, 400),
         (0.03, 6, 31, 50, 0.0, 600),
         (0.03, 4, 31, 50, 0.0, 600),
         (0.05, 6, 63, 50, 0.0, 400),
         (0.03, 6, 63, 50, 0.0, 600),
-        (0.05, 6, 31, 100, 0.0, 400),
-        (0.03, 6, 31, 100, 0.0, 600),
-        (0.05, 6, 31, 50, 0.1, 400),
-        (0.03, 6, 31, 50, 0.1, 600),
-    ]
-
-    best_hgb_nm = None
-    best_hgb_nm_m: Optional[Metrics] = None
-    for lr_, md_, mln_, msl_, l2_, it_ in hgb_grid:
-        hgb = HistGradientBoostingClassifier(
-            learning_rate=lr_,
-            max_depth=md_,
-            max_leaf_nodes=mln_,
-            min_samples_leaf=msl_,
-            l2_regularization=l2_,
-            max_iter=it_,
-            random_state=42,
-        )
-        hgb.fit(Xtr1, ytr)
-        p2 = hgb.predict_proba(Xv1)[:, 1]
-        m2 = _eval(yv, p2)
-        if (best_hgb_nm_m is None) or (m2.logloss < best_hgb_nm_m.logloss):
-            best_hgb_nm = hgb
-            best_hgb_nm_m = m2
-    assert best_hgb_nm_m is not None and best_hgb_nm is not None
-    print(f"[best] HGB(no-market best) logloss={best_hgb_nm_m.logloss:.6f} brier={best_hgb_nm_m.brier:.6f} acc={best_hgb_nm_m.acc:.6f}")
-
-    # --- Candidate 3: HistGradientBoosting (with market) ---
-    # Evaluate only on rows where market exists to compare fairly vs market.
-    feat_market = _feature_cols(df, include_market=True)
-    if "has_market" not in df.columns:
-        # backward-compat: if dataset not rebuilt yet
-        df["has_market"] = ((pd.to_numeric(df.get("oddsA"), errors="coerce").notna()) & (pd.to_numeric(df.get("oddsB"), errors="coerce").notna())).astype(int)
-        train_df, val_df = _train_val_split(df)
-
-    market_mask_val = val_df.get("has_market", 0).astype(int).values == 1
-    market_mask_tr = train_df.get("has_market", 0).astype(int).values == 1
-
-    best_model = lr
-    best_imputer = imp1
-    best_feats = feat_nomarket
-    best_name = "LR(no-market)"
-    best_score = m1.logloss
-
-    # prefer better no-market among LR/HGB
-    if best_hgb_nm_m.logloss < best_score:
-        best_model, best_name, best_score = best_hgb_nm, "HGB(no-market)", best_hgb_nm_m.logloss
-
-    # Now try market model (if we have enough rows)
-    if market_mask_tr.sum() >= 5000 and market_mask_val.sum() >= 1000:
-        imp3 = SimpleImputer(strategy="median")
-        Xtr3 = imp3.fit_transform(train_df.loc[market_mask_tr, feat_market])
-        Xv3 = imp3.transform(val_df.loc[market_mask_val, feat_market])
-        ytr3 = train_df.loc[market_mask_tr, "y"].astype(int).values
-        yv3 = val_df.loc[market_mask_val, "y"].astype(int).values
-        best_hgb_m = None
-        best_hgb_m_m: Optional[Metrics] = None
-        for lr_, md_, mln_, msl_, l2_, it_ in hgb_grid:
-            hgb_m = HistGradientBoostingClassifier(
+        (0.05, 6, 31, 100, 0.1, 400),
+        (0.03, 6, 31, 100, 0.1, 600),
+    ]:
+        grid.append(
+            HistGradientBoostingClassifier(
                 learning_rate=lr_,
                 max_depth=md_,
                 max_leaf_nodes=mln_,
@@ -173,101 +94,168 @@ def train_and_select() -> Tuple[Path, Path, Path]:
                 max_iter=it_,
                 random_state=42,
             )
-            hgb_m.fit(Xtr3, ytr3)
-            p3 = hgb_m.predict_proba(Xv3)[:, 1]
-            m3 = _eval(yv3, p3)
-            if (best_hgb_m_m is None) or (m3.logloss < best_hgb_m_m.logloss):
-                best_hgb_m = hgb_m
-                best_hgb_m_m = m3
-        assert best_hgb_m is not None and best_hgb_m_m is not None
-        print(f"[best] HGB(+market best) on market-rows n={best_hgb_m_m.n:,} logloss={best_hgb_m_m.logloss:.6f} brier={best_hgb_m_m.brier:.6f} acc={best_hgb_m_m.acc:.6f}")
+        )
+    return grid
 
-        # Compare vs market baseline on same rows
-        pm = pd.to_numeric(val_df.loc[market_mask_val, "pA_market"], errors="coerce").astype(float).values
-        mm = _eval(yv3, pm)
-        print(f"[best] Market baseline n={mm.n:,} logloss={mm.logloss:.6f} brier={mm.brier:.6f} acc={mm.acc:.6f}")
 
-        # If market-augmented model beats market on logloss, select it (main business objective)
-        if best_hgb_m_m.logloss < mm.logloss:
-            best_model = best_hgb_m
-            best_imputer = imp3
-            best_feats = feat_market
-            best_name = "HGB(+market)"
-            best_score = best_hgb_m_m.logloss
+def _calibrate(model, imputer: SimpleImputer, feats: List[str], df: pd.DataFrame) -> Optional[CalibratedClassifierCV]:
+    """
+    Calibrate ``model`` using only within-train (year == CALIB_YEAR) data.
+    The model is refit on year < CALIB_YEAR, then frozen-calibrated on the
+    held-out within-train year. Returns None when slices are too small.
+    """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    yr = df["date"].dt.year
 
-    # --- Calibration (optional but often improves logloss) ---
-    # We calibrate only if we have enough 2021 matches in the relevant training slice.
-    def _maybe_calibrate(model, imputer, feats: List[str], use_market_mask: bool) -> Tuple[object, float, str]:
-        train_base, calib = _train_calib_split(df)
-        if len(calib) < 2000 or len(train_base) < 10000:
-            return model, float("inf"), "no-calib"
+    pre = df[yr < CALIB_YEAR]
+    cal = df[yr == CALIB_YEAR]
+    if len(pre) < 10_000 or len(cal) < 1_500:
+        return None
 
-        if use_market_mask and "has_market" in train_base.columns and "has_market" in calib.columns:
-            train_base = train_base[train_base["has_market"].astype(int) == 1].copy()
-            calib = calib[calib["has_market"].astype(int) == 1].copy()
-            if len(calib) < 1000 or len(train_base) < 5000:
-                return model, float("inf"), "no-calib"
+    X_pre = imputer.fit_transform(pre[feats])
+    y_pre = pre["y"].astype(int).values
+    X_cal = imputer.transform(cal[feats])
+    y_cal = cal["y"].astype(int).values
 
-        Xtr = imputer.fit_transform(train_base[feats])
-        ytr2 = train_base["y"].astype(int).values
-        Xc = imputer.transform(calib[feats])
-        yc = calib["y"].astype(int).values
+    # Refit base on the calibration train slice
+    model.fit(X_pre, y_pre)
 
-        # refit base model on train_base
-        model.fit(Xtr, ytr2)
+    try:
+        from sklearn.frozen import FrozenEstimator  # type: ignore
+        prefit_est = FrozenEstimator(model)
+        cv = None
+    except Exception:
+        prefit_est = model
+        cv = "prefit"
 
-        best_cal = None
-        best_ll = float("inf")
-        best_kind = "no-calib"
-        # Avoid deprecated cv="prefit" when possible
+    best = None
+    best_ll = float("inf")
+    for method in ("sigmoid", "isotonic"):
         try:
-            from sklearn.frozen import FrozenEstimator  # type: ignore
-            frozen = FrozenEstimator(model)
-            prefit_est = frozen
-            cv = None
-        except Exception:
-            prefit_est = model
-            cv = "prefit"
-
-        for method in ["sigmoid", "isotonic"]:
-            cal = CalibratedClassifierCV(prefit_est, method=method, cv=cv)  # type: ignore[arg-type]
-            cal.fit(Xc, yc)
-            # evaluate on val (same imputer already fitted on train_base)
-            Xv = imputer.transform(val_df[feats])
-            pv = cal.predict_proba(Xv)[:, 1]
-            ll = float(log_loss(yv, pv))
+            cal_clf = CalibratedClassifierCV(prefit_est, method=method, cv=cv)  # type: ignore[arg-type]
+            cal_clf.fit(X_cal, y_cal)
+            p = cal_clf.predict_proba(X_cal)[:, 1]
+            ll = float(log_loss(y_cal, p))
             if ll < best_ll:
                 best_ll = ll
-                best_cal = cal
-                best_kind = method
-        if best_cal is None:
-            return model, float("inf"), "no-calib"
-        return best_cal, best_ll, best_kind
+                best = cal_clf
+        except Exception as e:
+            print(f"[best] calibration({method}) skipped: {e}")
+    return best
 
-    use_market = best_name == "HGB(+market)"
-    calibrated_model, cal_ll, cal_kind = _maybe_calibrate(best_model, best_imputer, best_feats, use_market_mask=use_market)
-    if cal_ll < best_score:
-        best_model = calibrated_model
-        best_name = f"{best_name}+cal({cal_kind})"
-        best_score = cal_ll
 
-    print(f"[best] Selected: {best_name} (objective logloss={best_score:.6f})")
+def train_and_select() -> Tuple[Path, Path, Path]:
+    if not TRAIN_DATA_PATH.exists():
+        raise FileNotFoundError(f"Train dataset not found: {TRAIN_DATA_PATH}")
 
-    model_path = MODELS_DIR / "logreg_final.pkl"   # keep existing filenames for compatibility
+    print(f"[best] Reading: {TRAIN_DATA_PATH}")
+    df = pd.read_csv(TRAIN_DATA_PATH, low_memory=False)
+    train_df, val_df, test_df = _split(df)
+    print(f"[best] Train={len(train_df):,} Val={len(val_df):,} Test={len(test_df):,}")
+
+    feats = select_model_features(list(df.columns), include_market=False)
+    print(f"[best] Feature count (no market): {len(feats)}")
+
+    imp = SimpleImputer(strategy="median")
+    X_tr = imp.fit_transform(train_df[feats])
+    X_va = imp.transform(val_df[feats])
+    y_tr = train_df["y"].astype(int).values
+    y_va = val_df["y"].astype(int).values
+
+    candidates = []
+
+    # 1) Logistic regression baseline
+    lr = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(penalty="l2", C=1.0, max_iter=2000, n_jobs=-1, solver="lbfgs"),
+    )
+    lr.fit(X_tr, y_tr)
+    m_lr = _eval(y_va, lr.predict_proba(X_va)[:, 1])
+    print(f"[best] LR val={m_lr.asdict()}")
+    candidates.append(("LogReg", lr, m_lr))
+
+    # 2) Hist gradient boosting grid
+    best_hgb = None
+    best_hgb_metrics: Optional[Metrics] = None
+    for hgb in _grid_hgb():
+        hgb.fit(X_tr, y_tr)
+        m = _eval(y_va, hgb.predict_proba(X_va)[:, 1])
+        if best_hgb_metrics is None or m.logloss < best_hgb_metrics.logloss:
+            best_hgb = hgb
+            best_hgb_metrics = m
+    assert best_hgb is not None and best_hgb_metrics is not None
+    print(f"[best] HGB val={best_hgb_metrics.asdict()}")
+    candidates.append(("HGB", best_hgb, best_hgb_metrics))
+
+    # Pick the best on validation log-loss
+    best_name, best_model, best_metrics = min(candidates, key=lambda c: c[2].logloss)
+    print(f"[best] Selected base: {best_name} val_logloss={best_metrics.logloss:.6f}")
+
+    # Calibration pass
+    cal_imp = SimpleImputer(strategy="median")
+    cal_model = _calibrate(best_model, cal_imp, feats, df)
+    if cal_model is not None:
+        X_va_c = cal_imp.transform(val_df[feats])
+        m_cal = _eval(y_va, cal_model.predict_proba(X_va_c)[:, 1])
+        print(f"[best] Calibrated val={m_cal.asdict()}")
+        if m_cal.logloss < best_metrics.logloss:
+            best_model = cal_model
+            best_name = f"{best_name}+cal"
+            best_metrics = m_cal
+            imp = cal_imp  # the calibrated path uses its own imputer fit
+
+    # Held-out test evaluation (never tuned against)
+    test_metrics_dict = None
+    if len(test_df) > 0:
+        X_te = imp.transform(test_df[feats])
+        y_te = test_df["y"].astype(int).values
+        m_te = _eval(y_te, best_model.predict_proba(X_te)[:, 1])
+        test_metrics_dict = m_te.asdict()
+        print(f"[best] {best_name} TEST={test_metrics_dict}")
+
+    # Market baseline (for reporting, on val rows where odds exist)
+    market_baseline = None
+    if "pA_market" in val_df.columns and "has_market" in val_df.columns:
+        mask = val_df["has_market"].astype(int) == 1
+        if mask.sum() > 1000:
+            mb = _eval(
+                val_df.loc[mask, "y"].astype(int).values,
+                pd.to_numeric(val_df.loc[mask, "pA_market"], errors="coerce").astype(float).values,
+            )
+            market_baseline = mb.asdict()
+            print(f"[best] Market baseline (val) {market_baseline}")
+
+    # Persist artifacts (filenames preserved for backwards compatibility)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    model_path = MODELS_DIR / "logreg_final.pkl"
     imputer_path = MODELS_DIR / "imputer_final.pkl"
     feature_cols_path = MODELS_DIR / "feature_columns.txt"
 
     joblib.dump(best_model, model_path)
-    joblib.dump(best_imputer, imputer_path)
-    feature_cols_path.write_text("\n".join(best_feats) + "\n", encoding="utf-8")
+    joblib.dump(imp, imputer_path)
+    feature_cols_path.write_text("\n".join(feats) + "\n", encoding="utf-8")
 
-    print(f"[best] Saved model: {model_path}")
-    print(f"[best] Saved imputer: {imputer_path}")
-    print(f"[best] Saved features: {feature_cols_path} (n={len(best_feats)})")
+    METRICS_PATH.write_text(
+        json.dumps(
+            {
+                "model": best_name,
+                "n_features": len(feats),
+                "validation": best_metrics.asdict(),
+                "test": test_metrics_dict,
+                "market_baseline_val": market_baseline,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
+    print(f"[best] Saved model -> {model_path}")
+    print(f"[best] Saved imputer -> {imputer_path}")
+    print(f"[best] Saved features -> {feature_cols_path} (n={len(feats)})")
+    print(f"[best] Metrics -> {METRICS_PATH}")
     return model_path, imputer_path, feature_cols_path
 
 
 if __name__ == "__main__":
     train_and_select()
-

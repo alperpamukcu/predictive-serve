@@ -1,432 +1,242 @@
-## Predictive Serve 🎾
+# Predictive Serve 🎾
 
-**Predictive Serve** is an end-to-end Python project for **tennis match forecasting** with a reproducible pipeline, Sportradar integrations (upcoming schedule + odds), and a polished Streamlit UI.
-
-### What it does
-- **Historical pipeline**: downloads and processes ATP match data from `tennis-data.co.uk` (seasons **2000–2026**)
-- **Feature engineering**: Elo, form, workload, head-to-head, surface, and optional market-derived features
-- **Model**: Logistic Regression baseline (fast, debuggable)
-- **Upcoming matches**: pulls fixtures from **Sportradar Tennis API** and enriches with **Sportradar Odds Comparison (OC Regular)** consensus lines (when available)
-- **UI**: Streamlit app (Matches Explorer, Upcoming, What-if, Players, Tournaments, Leaderboards)
-
-This repository is intended for **learning / portfolio / research** use. If you deploy it publicly, read the security & operations notes below.
+**Predictive Serve** is an end-to-end Python application for **professional tennis match
+forecasting**. It combines a reproducible historical data pipeline, leakage-safe feature
+engineering, a calibrated gradient-boosted model, and a polished Streamlit console that
+explores predictions, live upcoming fixtures, and per-player / per-tournament profiles.
 
 ---
 
-## 1. Quick Start
+## What it does
 
-### 1.1. Prerequisites
+- **Historical pipeline** — downloads ATP match data from [tennis-data.co.uk](http://www.tennis-data.co.uk)
+  (seasons 2000-present) and rebuilds a clean, deduplicated match table.
+- **Feature engineering** — global + surface Elo, short- and long-term form, head-to-head,
+  workload, surface, round importance, and tournament tier.
+- **Production model** — `HistGradientBoostingClassifier` selected against a Logistic
+  Regression baseline, with optional Platt / Isotonic calibration on a within-train slice.
+  Market-derived features are **excluded by design** so the AI signal is independent of
+  bookmaker prices.
+- **Time-aware splits** — train (year < 2022), validation (2022-2024), held-out test
+  (year ≥ 2025). Metrics are persisted to `models/metrics.json`.
+- **Live upcoming fixtures** — fetched from [api-tennis.com](https://api-tennis.com) with
+  intelligent surface inference and median consensus odds across books.
+- **Streamlit console** — six views (Matches, Upcoming, Players, Tournaments, What-if,
+  Leaderboard) with click-through navigation between them.
 
-- **OS**: Windows 10/11 (for the `.bat` convenience script) – other OSes can run the Python commands manually.
-- **Python**: 3.10+  
-  On Windows, the project expects the **`py` launcher** to exist (`py --version` should work).
+---
 
-Clone the repo:
+## Screenshots & feature highlights
 
-```bash
-git clone https://github.com/your-user/predictive-serve.git
-cd predictive-serve
-```
+- 🟢 **Matches Explorer** — historical predictions with pastel green / red row tinting
+  showing which calls the AI got right.
+- 📅 **Upcoming** — live fixtures grouped by day, with model probabilities and confidence
+  pills. Falls back to a labelled demo dataset when no API key is configured.
+- 👤 **Players** — searchable / filterable roster sorted by career match count, full Elo
+  trajectory chart, surface breakdown, and on-demand player photo download via API-Tennis.
+- 🏆 **Tournaments** — per-event volume, recent champions list, and all-time matches.
+- 🎲 **What-if** — pick any two players, surface, round, and date; the model produces a
+  win-probability split with two-way pacing bars.
+- 🏅 **Leaderboard** — windowed win-rate ranking with per-surface filters.
 
-### 1.2. Easiest way (Windows one‑click)
+Every view contains "Open profile" jumps so a player or tournament name in any context can
+take you to its full profile in one click.
 
-From File Explorer, in the project root:
+---
 
-1. Double‑click **`run_predictive_serve.bat`**
-2. Wait while it:
-   - Installs Python dependencies from `requirements.txt`
-   - Downloads match data for seasons **2000–2026**
-   - Runs the full data & feature pipeline
-   - Trains the Logistic Regression model
-   - Scores all matches and writes `data/processed/all_predictions.csv`
-   - (Optional) fetches upcoming fixtures + odds via Sportradar
-   - Starts the Streamlit app
-3. When it finishes, your browser will open (or you can go to `http://localhost:8501`).
+## Quick start
 
-You can also run it from a terminal:
+### Prerequisites
 
-```bash
-run_predictive_serve.bat
-```
+- **Python 3.10+** (the project is tested on 3.11)
+- On Windows, the [`py` launcher](https://docs.python.org/3/using/windows.html#getting-started)
+  is recommended.
 
-If anything fails, the script stops with a clear `[ERROR] ...` or `[WARN] ...` message.
+### One-click launch (Windows)
 
-### 1.3. Manual setup (any OS)
+Double-click [`run_predictive_serve.bat`](./run_predictive_serve.bat). The script will:
 
-Create (optionally) and activate a virtual env, then:
+1. Install dependencies from [`requirements.txt`](./requirements.txt)
+2. Download historical match data
+3. Run the data + feature pipeline
+4. Train and evaluate the model
+5. Score every match in the dataset
+6. (Optional) fetch live upcoming fixtures + odds via API-Tennis
+7. Open the Streamlit UI on `http://localhost:8501`
+
+### Manual setup (any OS)
 
 ```bash
 pip install -r requirements.txt
-```
 
-Run the pipeline manually:
-
-```bash
-# 1) Fetch raw data from tennis-data.co.uk (seasons 2000–2026)
+# 1) Historical pipeline
 py -m src.data.fetch_data
-
-# 2) Preprocess + cleaning
 py -m src.data.preprocess
 py -m src.data.cleaning
 
-# 3) Feature engineering
+# 2) Feature engineering
 py -m src.features.elo
 py -m src.features.form
-py -m src.features.sets      # set-based features (best-of-3/5), best-effort
+py -m src.features.sets
 py -m src.features.build_features
 
-# 4) Train model and score all matches
-py -m src.models.train_logreg
+# 3) Model selection + held-out test evaluation
+py -m src.models.train_best
+
+# 4) Score every match for the UI
 py -m src.models.score_all_matches
-```
 
-Then start the UI:
+# 5) (Optional) live fixtures + odds
+py -m src.data.fetch_upcoming_apitennis
+py -m src.data.fetch_odds_apitennis
 
-```bash
+# 6) UI
 py -m streamlit run streamlit_app.py
 ```
 
 ---
 
-## 2. API-Tennis (Upcoming + Odds + Player Logos)
+## API-Tennis configuration
 
-### 2.1. Configure environment variables
-
-Copy `.env.example` to `.env` and fill the values (never commit `.env`):
+The Upcoming and Players (live photo) views are powered by
+[api-tennis.com](https://api-tennis.com). To enable them:
 
 ```bash
 cp .env.example .env
+# then edit .env and set:
+#   API_TENNIS_KEY=<your-key>
 ```
 
-Required:
-- `API_TENNIS_KEY`
+The repository does not commit `.env` (it's listed in `.gitignore`). All API responses are
+cached on disk under `data/cache/api_tennis/` to respect the provider's rate limits — the
+TTL is configurable via `API_TENNIS_CACHE_TTL_S` (fixtures) and
+`API_TENNIS_ODDS_CACHE_TTL_S` (odds) in `.env`.
 
-Optional:
-- `API_TENNIS_PROXY` (recommended if your ISP blocks the host / “safe internet” filtering)
-
-### 2.2. Fetch upcoming fixtures
-
-```bash
-py -m src.data.fetch_upcoming_apitennis
-```
-
-Writes: `data/processed/fixtures_upcoming.csv`
-
-### 2.3. Enrich fixtures with odds
-
-```bash
-py -m src.data.fetch_odds_apitennis
-```
-
-Notes:
-- Odds availability depends on API-Tennis coverage. Not all fixtures will have odds.
-- You can bound runtime with `API_TENNIS_ODDS_MAX_ROWS` for faster public refresh cycles.
-
-### 2.4. Player logos (download + cache)
-
-```bash
-py -m src.data.fetch_player_images_apitennis
-```
-
-Logos are downloaded from the logo URLs returned by API-Tennis fixtures and cached under `assets/players/`.
-The UI also works without images thanks to an offline avatar placeholder fallback.
+When a key is configured, the Streamlit UI shows a "Refresh fixtures from API" button in
+the Upcoming view. Otherwise the view degrades gracefully to a labelled demo dataset
+synthesized from recent active players.
 
 ---
 
-## 3. Project Overview
+## Architecture
 
-### 3.1. Problem
-
-We want to answer:
-
-> *“Given tennis players’ form, Elo rating, head‑to‑head history, rest, tournament and surface information – how good can we get at predicting match outcomes compared to betting markets?”*
-
-Key elements:
-- **Data source**: `tennis-data.co.uk` ATP historical match files
-- **Target**: `y` (1 = player A wins, 0 = player B wins)
-- **Model output**: \( P(\text{player A wins}) \)
-- **Baseline**: implied probabilities from bookmaker odds
-
-### 3.2. High-level pipeline
-
-```text
-1. src/data/fetch_data.py
-   → data/raw/allyears.csv        (2000–2026)
-
-2. src/data/preprocess.py
-   → data/processed/matches_allyears.csv
-
-3. src/data/cleaning.py
-   → data/processed/matches_clean.csv
-
-4. src/features/elo.py
-   → data/processed/matches_with_elo.csv
-
-5. src/features/form.py
-   → data/processed/matches_with_elo_form.csv
-
-6. src/features/sets.py
-   → data/processed/matches_with_elo_form_sets.csv
-
-7. src/features/build_features.py
-   → data/processed/train_dataset.csv
-
-8. src/models/train_logreg.py
-   → models/logreg_final.pkl
-   → models/imputer_final.pkl
-   → models/feature_columns.txt
-
-9. src/models/score_all_matches.py
-   → data/processed/all_predictions.csv
-
-10. streamlit_app.py / src/predict/whatif.py
-    → interactive UI / CLI predictions
+```
+┌──────────────────────────┐    ┌────────────────────────┐    ┌─────────────────────┐
+│ tennis-data.co.uk        │    │ api-tennis.com         │    │ models/             │
+│ historical Excel files   │    │ live fixtures + odds   │    │ logreg_final.pkl    │
+└────────────┬─────────────┘    └────────────┬───────────┘    │ imputer_final.pkl   │
+             │                               │                │ feature_columns.txt │
+             ▼                               ▼                │ metrics.json        │
+┌──────────────────────────┐    ┌────────────────────────┐    └─────────────────────┘
+│ src/data/                │    │ src/integrations/      │              ▲
+│   fetch_data → CSV       │    │   api_tennis (cache)   │              │
+│   preprocess → schema    │    │   surface inference    │              │
+│   cleaning → matches     │    │   consensus odds       │              │
+└────────────┬─────────────┘    └────────────┬───────────┘              │
+             ▼                               ▼                          │
+┌──────────────────────────┐    ┌────────────────────────┐              │
+│ src/features/            │    │ data/processed/        │              │
+│   elo, form, sets        │──▶│  fixtures_upcoming.csv │              │
+│   build_features → X     │    │  matches_*.csv          │              │
+└────────────┬─────────────┘    │  train_dataset.csv     │              │
+             ▼                  │  all_predictions.csv   │              │
+┌──────────────────────────┐    └────────────┬───────────┘              │
+│ src/models/              │                 │                          │
+│   train_best → model     │─────────────────┴──────────────────────────┘
+│   score_all_matches      │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ streamlit_app.py         │  ← English-only console
+│  6 views, click-through  │
+│  player / tournament nav │
+└──────────────────────────┘
 ```
 
 ---
 
-## 4. Directory Structure
+## Modelling: leakage-safe by design
 
-```text
+The most common pitfall in tennis forecasting is letting bookmaker prices leak into the
+model. Predictive Serve takes a deliberate stance:
+
+- The list of **leaky market columns** (`oddsA`, `oddsB`, `pA_market`, `pB_market`,
+  `p_diff`, `logit_pA_market`, `has_market`) is centralised in
+  [`src/utils/feature_utils.py`](./src/utils/feature_utils.py) and excluded from the
+  feature set in **every** training and scoring path.
+- The "edge" displayed in the UI (model − market) therefore reflects an **independent**
+  AI signal rather than a function of the market it is being compared to.
+- A held-out test split (year ≥ 2025) is **never** consulted during model selection or
+  calibration.
+
+The training script ([`src/models/train_best.py`](./src/models/train_best.py)) writes
+[`models/metrics.json`](./models/metrics.json) with both the validation and the held-out
+test scores, so changes can be tracked across commits.
+
+---
+
+## UI design
+
+- Dark slate / navy theme with high-contrast typography.
+- Sticky top navigation pill that surfaces the live model name + accuracy.
+- Six-tile KPI bar (predictions, pick accuracy, log loss, high-confidence accuracy).
+- Button-based section navigation that supports **deep linking** — every player and
+  tournament name in tables or cards can jump to a profile page.
+- Match rows in the explorer are tinted **pastel green** when the AI was correct and
+  **pastel red** when it was wrong, with bold "AI Pick" / "Result" columns for fast
+  scanning.
+
+---
+
+## Project layout
+
+```
 predictive-serve/
 ├─ data/
-│  ├─ raw/
-│  │  └─ allyears.csv                  # merged raw tennis-data.co.uk seasons
-│  └─ processed/
-│     ├─ matches_allyears.csv         # normalized from allyears
-│     ├─ matches_clean.csv            # cleaned subset
-│     ├─ matches_with_elo.csv         # Elo features added
-│     ├─ matches_with_elo_form.csv    # form and workload features
-│     ├─ matches_with_elo_form_sets.csv
-│     ├─ train_dataset.csv            # final training feature matrix
-│     ├─ all_predictions.csv          # model scores for all matches
-│     └─ val_predictions.csv          # (optional) validation predictions
-│
-├─ models/
-│  ├─ logreg_final.pkl                # Logistic Regression pipeline
-│  ├─ imputer_final.pkl               # SimpleImputer for missing values
-│  └─ feature_columns.txt             # ordered list of feature column names
-│
-├─ notebooks/
-│  ├─ 01_eda_matches_allyears.ipynb   # exploratory data analysis
-│  └─ 02_train_models.ipynb           # model comparison / metrics
-│
+│  ├─ raw/             # tennis-data.co.uk merged Excel files
+│  └─ processed/       # cleaned matches + feature matrix + predictions
+├─ models/             # trained model, imputer, feature list, metrics.json
+├─ assets/players/     # cached player photos (downloaded on demand)
 ├─ src/
-│  ├─ data/
-│  │  ├─ fetch_data.py                # download Excel files and merge → allyears.csv
-│  │  ├─ preprocess.py                # normalize raw data → matches_allyears.csv
-│  │  ├─ cleaning.py                  # filters / sanity checks → matches_clean.csv
-│  │  └─ schema.py                    # canonical column definitions
-│  │
-│  ├─ features/
-│  │  ├─ elo.py                       # global + surface Elo ratings
-│  │  ├─ form.py                      # short‑term form and workload
-│  │  ├─ sets.py                      # set‑level performance (best effort)
-│  │  └─ build_features.py            # combine all features → train_dataset.csv
-│  │
-│  ├─ models/
-│  │  ├─ train_logreg.py              # train Logistic Regression
-│  │  └─ score_all_matches.py         # score all historical matches
-│  │
-│  ├─ predict/
-│  │  └─ whatif.py                    # scenario‑based single‑match predictions
-│  │
-│  ├─ analysis/
-│  │  └─ metrics.py                   # model vs market performance metrics
-│  │
-│  └─ utils/
-│     ├─ config.py                    # shared paths (PROJECT_ROOT, DATA_DIR, etc.)
-│     └─ feature_utils.py             # loading saved feature lists
-│
-├─ streamlit_app.py                   # main Streamlit UI
-├─ test_quick.py                      # lightweight sanity checks
-├─ test_system.py                     # full end‑to‑end system tests
-├─ run_predictive_serve.bat           # Windows one‑click launcher
-├─ requirements.txt                   # Python dependencies
-└─ .gitignore
+│  ├─ data/            # fetchers, preprocess, cleaning, schema
+│  ├─ features/        # Elo, form, sets, head-to-head, market features
+│  ├─ models/          # train_best, train_logreg, score_all_matches
+│  ├─ integrations/    # API-Tennis client (cached + consensus odds)
+│  ├─ predict/         # whatif single-match scoring
+│  └─ utils/           # paths, env, aliases, feature_utils, surface, avatars
+├─ streamlit_app.py    # Streamlit console
+├─ run_predictive_serve.bat   # Windows one-click launcher
+└─ requirements.txt
 ```
 
 ---
 
-## 5. Components in More Detail
+## Development
 
-### 4.1. Data layer (`src/data`)
-
-- **`config.py` (in `src/utils`)**  
-  Central place for paths:
-  - `PROJECT_ROOT`, `DATA_DIR`, `RAW_DIR`, `PROCESSED_DIR`
-  - `MODELS_DIR`, `NOTEBOOKS_DIR`
-  - `ALLYEARS_PATH` (canonical path for `allyears.csv`)
-
-- **`schema.py`**  
-  Defines the canonical match schema (`MATCH_COLUMNS`), including:
-  - `date`, `tourney`, `surface`, `round`
-  - `playerA`, `playerB`, `rankA`, `rankB`
-  - `oddsA`, `oddsB`, `winner`
-  - `playerA_norm`, `playerB_norm`
-
-- **`fetch_data.py`**  
-  - Downloads Excel files from `tennis-data.co.uk` for seasons **2000–2026**
-  - Merges them into a single CSV: `data/raw/allyears.csv`
-  - Handles missing seasons gracefully (older `.xls` years require `xlrd` if you want them)
-
-- **`preprocess.py`**  
-  - Normalizes column names and types
-  - Parses dates
-  - Normalizes player names (lowercase / trimmed)
-  - Computes fair implied probabilities from odds
-  - Writes `data/processed/matches_allyears.csv`
-
-- **`cleaning.py`**  
-  - Drops rows with missing critical fields
-  - Filters to matches between **2000 and 2026**
-  - Ensures odds are numeric and within a reasonable range
-  - Removes unfinished matches (retired, walkover, etc.)
-  - Writes `data/processed/matches_clean.csv`
-
-### 4.2. Feature engineering (`src/features`)
-
-- **`elo.py`**  
-  - Computes **global Elo** and **surface‑specific Elo** ratings (Hard, Clay, Grass, etc.)
-  - Adds `eloA`, `eloB`, `elo_diff`, `elo_surfaceA`, `elo_surfaceB`, `elo_surface_diff`
-  - Saves to `matches_with_elo.csv`
-
-- **`form.py`**  
-  - Computes short‑term form and workload:
-    - Win rate over the last 5 and 10 matches
-    - Days since last match (clipped)
-    - Number of matches in the last 30 days
-  - Saves to `matches_with_elo_form.csv`
-
-- **`sets.py`**  
-  - Best‑effort set‑level stats (overall, best‑of‑3, best‑of‑5) where scoring data is available
-  - Saves to `matches_with_elo_form_sets.csv`
-
-- **`build_features.py`**  
-  - Adds:
-    - Head‑to‑head features (`h2h_matches`, win rates)
-    - Round importance and tournament tier
-    - Surface one‑hot features
-    - Market features (`pA_market`, `pB_market`, `p_diff`, `logit_pA_market`)
-    - Various “A vs B” differences (Elo diff, form diff, rank diff, etc.)
-  - Outputs `data/processed/train_dataset.csv` with:
-    - Meta columns: `date`, `surface`, `playerA`, `playerB`, `y`
-    - ~35–40 feature columns used by the model
-
-### 4.3. Modeling (`src/models`)
-
-- **`train_logreg.py`**
-  - Reads `train_dataset.csv`
-  - Splits into train / validation by date (pre‑2022 vs 2022+)
-  - Builds a pipeline: `SimpleImputer(median)` → `StandardScaler` → `LogisticRegression`
-  - Excludes raw market odds features from training to avoid leakage
-  - Saves:
-    - `models/logreg_final.pkl`
-    - `models/imputer_final.pkl`
-    - `models/feature_columns.txt`
-  - Prints validation metrics (log‑loss, Brier, accuracy)
-
-- **`score_all_matches.py`**
-  - Loads the model, imputer, and feature list
-  - Applies them to `train_dataset.csv`
-  - Writes `data/processed/all_predictions.csv` with:
-    - `date`, `surface`, `playerA`, `playerB`, `y`
-    - `p_model` (model probability A wins)
-    - `pA_market` and `edge = p_model - pA_market` when odds exist
-
-### 4.4. UI and predictions
-
-- **`streamlit_app.py`**
-  - Main web UI with three main views:
-    1. **Matches** – filter matches, compare model vs market, inspect edges
-    2. **What‑if** – scenario‑based prediction for arbitrary matchups
-    3. **Leaderboard** – player ranking and performance aggregates
-  - Uses `all_predictions.csv` plus raw/feature data when needed.
-
-- **`src/predict/whatif.py`**
-  - CLI and internal API for “what‑if” scenarios:
-    - Build a single feature row for a hypothetical match
-    - Run it through the same model and imputer as the main pipeline
-  - Example CLI usage:
-
-    ```bash
-    py -m src.predict.whatif --playerA "Roger Federer" --playerB "Rafael Nadal" --surface "Hard" --date "2020-01-15"
-    ```
-
----
-
-## 6. Testing
-
-### 5.1. Quick structural test
+### Useful commands
 
 ```bash
+# Re-train and write metrics.json
+py -m src.models.train_best
+
+# Sanity check
 py test_quick.py
-```
-
-Checks that the basic folder/file structure and imports look correct.
-
-### 5.2. Full system test
-
-```bash
 py test_system.py
 ```
 
-Runs a more complete end‑to‑end test including:
-- Data paths and existence of key files
-- Ability to import key modules
-- Model loading
-- Basic pipeline sanity checks
+### Roadmap
+
+- Player nationality / age via API-Tennis player endpoint
+- Reliability diagram and per-surface calibration plots
+- SHAP-style "why this pick" explanations on every match card
+- Filter persistence in URL query parameters
+- Optional light-mode theme
+
+Contributions welcome — open an issue to discuss bigger changes first.
 
 ---
 
-## 7. Troubleshooting
+## License
 
-- **`ModuleNotFoundError` or missing packages**
-  - Run:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-- **`FileNotFoundError: train_dataset.csv` or similar**
-  - Re‑run the pipeline:
-    ```bash
-    py -m src.data.fetch_data
-    py -m src.data.preprocess
-    py -m src.data.cleaning
-    py -m src.features.elo
-    py -m src.features.form
-    py -m src.features.sets
-    py -m src.features.build_features
-    py -m src.models.train_logreg
-    py -m src.models.score_all_matches
-    ```
-
-- **Streamlit fails to start**
-  - Confirm:
-    ```bash
-    py -m pip install streamlit
-    py -m streamlit run streamlit_app.py
-    ```
-
----
-
-## 8. Security & Operations (for public deployments)
-
-If you deploy this publicly, do **not** expose keys to clients.
-
-- **Keys**: keep API keys in server-side environment variables (Streamlit Cloud secrets / Docker secrets / GitHub Actions secrets).
-- **No client-side calls**: Sportradar calls must be made from the backend (this repo does that).
-- **Refresh strategy**:
-  - Prefer a server-side scheduler (cron/GitHub Actions) that runs:
-    - `py -m src.data.fetch_upcoming_sportradar`
-    - `py -m src.data.fetch_odds_sportradar`
-  - Then the UI reads fresh CSVs. This keeps keys out of the browser and reduces rate-limit risk.
-- **Rate limits**: trial keys can receive **429**. The fetchers back off and continue safely.
-- **Data artifacts**: generated datasets and model binaries can be large. In this repo they are ignored by default via `.gitignore`. For releases, keep only small examples in `data/examples/`.
-
-
-- All important paths are centralized in `src/utils/config.py`.
-- Feature names used by the model are stored in `models/feature_columns.txt`.
-- The current pipeline uses seasons **2000–2026** from `tennis-data.co.uk`.  
-  Earlier `.xls` seasons may require installing `xlrd` if you want to extend coverage.
-
+This project is intended for learning, portfolio, and research use. Tennis match results
+remain the property of their original sources (tennis-data.co.uk, api-tennis.com).

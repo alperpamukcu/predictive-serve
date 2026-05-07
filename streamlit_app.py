@@ -1,354 +1,596 @@
-# streamlit_app.py
+"""
+Predictive Serve — professional tennis forecasting console.
+
+English-only single-page app with six views:
+    1. Matches    - historical predictions explorer (with right/wrong colour cues)
+    2. Upcoming   - model-scored fixtures (API-Tennis, with demo fallback)
+    3. Players    - per-player profile, with player photo (API or local cache)
+    4. Tournaments- per-tournament profile
+    5. What-if    - single-match predictor
+    6. Leaderboard- aggregate player rankings
+
+Navigation is button-driven so the app can deep-link from any cell to a
+player or tournament profile in a single click.
+"""
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
-import html
-import textwrap
-import time
+import base64
+import datetime as dt
+import json
+import random
+import re
 import subprocess
 import sys
+from html import escape as h
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+import altair as alt
 import numpy as np
 import pandas as pd
-import altair as alt
+import requests
 import streamlit as st
-from joblib import load
+from joblib import load as joblib_load
 
-from src.utils.config import PROCESSED_DIR, MODELS_DIR, PROJECT_ROOT
-from src.utils.feature_utils import load_feature_list
-from src.utils.assets import AssetPaths, slugify, find_image
+from src.utils.assets import find_image, slugify
 from src.utils.avatars import svg_avatar_data_uri
-from src.utils.aliases import load_aliases
+from src.utils.config import MODELS_DIR, PROCESSED_DIR, PROJECT_ROOT
+from src.utils.env import getenv, try_load_dotenv
+from src.utils.feature_utils import load_feature_list
 
 try:
-    from src.analysis.metrics import compute_overall_metrics  # type: ignore
-except Exception:
-    compute_overall_metrics = None
+    from src.predict.whatif import build_feature_row  # type: ignore
+except Exception:  # pragma: no cover
+    build_feature_row = None  # type: ignore
 
-from src.predict.whatif import build_feature_row  # type: ignore
+try:
+    from src.integrations.api_tennis import ApiTennisConfig, get_fixtures  # type: ignore
+except Exception:  # pragma: no cover
+    ApiTennisConfig = None  # type: ignore
+    get_fixtures = None  # type: ignore
 
 
-# =========================
-# Page Config
-# =========================
+# =============================================================================
+# Page + assets
+# =============================================================================
+
 st.set_page_config(
     page_title="Predictive Serve",
-    layout="wide",
-    initial_sidebar_state="expanded",
     page_icon="🎾",
+    layout="wide",
+    initial_sidebar_state="collapsed",
     menu_items={"Get Help": None, "Report a bug": None, "About": None},
 )
 
 
-# =========================
-# i18n
-# =========================
-TR = {
-    "title": "Predictive Serve",
-    "settings": "Ayarlar",
-    "language": "Dil",
-    "dev_mode": "Geliştirici modu",
-    "reset": "Filtreleri sıfırla",
-    "filters_global": "Genel Filtreler",
-    "filters_matches": "Match Filters",
-    "date_range": "Tarih aralığı",
-    "date_single_hint": "Tek tarih seçtiniz. Aynı günü başlangıç-bitiş olarak kabul ettim.",
-    "surface": "Zemin",
-    "metrics": "Seçili Dönem Metrikleri",
-    "model_logloss": "Güven Kalitesi (Düşük iyi)",
-    "model_brier": "Hata Puanı (Düşük iyi)",
-    "model_acc": "Kazananı Bilme (%)",
-    "market_logloss": "Market Güven K.",
-    "market_brier": "Market Hata P.",
-    "market_acc": "Market Bilme (%)",
-    "tabs_matches": "Matches",
-    "tabs_whatif": "What-if",
-    "tabs_leaderboard": "Leaderboard",
-    "player_pick": "Oyuncu (yazıp ara)",
-    "player_any": "Hepsi",
-    "tournament_search": "Turnuva (içeren)",
-    "only_market": "Sadece market olasılığı olanlar",
-    "only_model": "Sadece model olasılığı olanlar",
-    "min_edge": "Minimum Avantaj (Fırsat)",
-    "found": "Bulunan maç sayısı",
-    "sort_by": "Sırala",
-    "ascending": "Artan",
-    "rows": "Satır",
-    "select_info": "Bir satır seç → maç detayı aşağıda açılır.",
-    "match_summary": "Maç Özeti",
-    "model_vs_market": "Model vs Market",
-    "whatif_title": "What-if",
-    "player_a": "Oyuncu A",
-    "player_b": "Oyuncu B",
-    "match_date": "Maç tarihi",
-    "round_code": "Round kodu (opsiyonel)",
-    "round_any": "Seçilmedi",
-    "enter_odds": "Oran gir (opsiyonel)",
-    "odds_a": "Odds A",
-    "odds_b": "Odds B",
-    "snap_title": "Simulation Settings (Time Travel)",
-    "snap_help": "Bu tarihteki oyuncu formunu ve Elo puanını baz alır (Geçmişe gitme simülasyonu).",
-    "snap_current": "Current (No Time Travel)",
-    "sim_settings": "Time Machine (Optional)",
-    "calc": "✅ HESAPLA",
-    "prediction": "Tahmin",
-    "model_picks": "Modelin seçimi",
-    "confidence": "Güven",
-    "low": "Düşük",
-    "medium": "Orta",
-    "high": "Yüksek",
-    "leaderboard_title": "Leaderboard",
-    "min_matches": "Min maç sayısı",
-    "metric": "Metrik",
-    "top_n": "Top N",
-    "winrate": "Win rate",
-    "wins": "Wins",
-    "avg_edge": "Avg edge (varsa)",
-    "players_to_plot": "Grafikte gösterilecek oyuncular",
-    "hero_headline": "Profesyonel tenis tahmin konsolu",
-    "hero_kicker": "Gerçek veri boru hattı • Sportradar gelecek takvimi + oranlar • Logistic Regression + Elo/form",
-}
-EN = {
-    "title": "Predictive Serve",
-    "settings": "Settings",
-    "language": "Language",
-    "dev_mode": "Developer mode",
-    "reset": "Reset filters",
-    "filters_global": "Global Filters",
-    "filters_matches": "Match Filters",
-    "date_range": "Date range",
-    "date_single_hint": "You picked a single date. Using it as both start and end.",
-    "surface": "Surface",
-    "metrics": "Overall Performance",
-    "model_logloss": "Confidence Quality (Lower is Better)",
-    "model_brier": "Error Score (Lower is Better)",
-    "model_acc": "Winner Prediction (%)",
-    "market_logloss": "Market Confidence",
-    "market_brier": "Market Error",
-    "market_acc": "Market Accuracy",
-    "tabs_matches": "Matches Explorer",
-    "tabs_whatif": "Predictor (What-if)",
-    "tabs_leaderboard": "Player Rankings",
-    "player_pick": "Filter by Player",
-    "player_any": "All Players",
-    "tournament_search": "Filter by Tournament",
-    "only_market": "Has Market Odds",
-    "only_model": "Has AI Prediction",
-    "min_edge": "Min Value (Ai Advantage)",
-    "found": "Matches found",
-    "sort_by": "Sort by",
-    "ascending": "Ascending",
-    "rows": "Rows",
-    "select_info": "Select a match above to see the AI analysis card.",
-    "match_summary": "Match Analysis Card",
-    "model_vs_market": "AI vs Market",
-    "whatif_title": "Match Predictor",
-    "player_a": "Player A",
-    "player_b": "Player B",
-    "match_date": "Match Date",
-    "round_code": "Round (Optional)",
-    "round_any": "Any / None",
-    "enter_odds": "Input Market Odds (Optional)",
-    "odds_a": "Odds for A",
-    "odds_b": "Odds for B",
-    "snap_title": "Simulation Settings (Time Travel)",
-    "snap_help": "Simulate match as if it happened on this date (uses historical form/Elo).",
-    "snap_current": "Current (No Time Travel)",
-    "sim_settings": "Time Machine (Optional)",
-    "calc": "🔮 PREDICT MATCH",
-    "prediction": "Prediction Result",
-    "model_picks": "AI Picks",
-    "confidence": "Confidence",
-    "low": "Low",
-    "medium": "Medium",
-    "high": "High",
-    "leaderboard_title": "Player Rankings",
-    "min_matches": "Min Matches Played",
-    "metric": "Ranking Metric",
-    "top_n": "Show Top",
-    "winrate": "Win Rate",
-    "wins": "Total Wins",
-    "avg_edge": "Avg Value (AI Advantage)",
-    "players_to_plot": "Players to plot",
-    "hero_headline": "Professional tennis forecasting console",
-    "hero_kicker": "End-to-end data pipeline • Sportradar upcoming + odds imagery • Classic ML baseline (LR + features)",
+CSS = """
+<style>
+header[data-testid="stHeader"] { visibility: hidden; height: 0; }
+div[data-testid="stToolbar"] { visibility: hidden; height: 0; }
+#MainMenu, footer { visibility: hidden; }
+
+:root {
+  --bg: #131a26;
+  --bg-2: #1a2334;
+  --surface: rgba(255,255,255,0.05);
+  --surface-2: rgba(255,255,255,0.085);
+  --surface-strong: rgba(255,255,255,0.12);
+  --line: rgba(255,255,255,0.12);
+  --line-strong: rgba(255,255,255,0.22);
+  --text: #f1f4fa;
+  --muted: rgba(241,244,250,0.78);
+  --soft-muted: rgba(241,244,250,0.55);
+  --accent: #6aa9ff;
+  --accent-2: #9c87ff;
+  --warm: #ff8d63;
+  --good: #2dd29a;
+  --good-soft: rgba(45, 210, 154, 0.16);
+  --bad: #ff6471;
+  --bad-soft: rgba(255, 100, 113, 0.16);
+  --radius: 14px;
+  --radius-lg: 20px;
 }
 
-def T(lang: str) -> Dict[str, str]:
-    return TR if lang == "TR" else EN
+.stApp {
+  background:
+    radial-gradient(1100px 600px at 12% -10%, rgba(106,169,255,0.10), transparent 55%),
+    radial-gradient(900px 520px at 92% -10%, rgba(156,135,255,0.08), transparent 55%),
+    radial-gradient(800px 600px at 50% 110%, rgba(255,141,99,0.04), transparent 50%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+}
+
+/* Centre the column and give it a sane max-width */
+.block-container {
+  padding-top: 0.6rem !important;
+  padding-left: 1.6rem !important;
+  padding-right: 1.6rem !important;
+  padding-bottom: 3rem;
+  max-width: 1280px;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* Top nav */
+.ps-nav {
+  position: sticky; top: 0; z-index: 240;
+  margin: 0 -1.6rem 1rem -1.6rem;
+  padding: 14px 24px;
+  backdrop-filter: blur(18px) saturate(140%);
+  background: linear-gradient(180deg, rgba(7,9,13,0.92), rgba(7,9,13,0.66));
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+}
+.ps-nav-left { display:flex; align-items:center; gap:14px; }
+.ps-logo {
+  width:34px; height:34px; border-radius:10px;
+  display:inline-flex; align-items:center; justify-content:center;
+  background: conic-gradient(from 220deg, #4ea1ff, #7c5cff, #ff7a3d, #4ea1ff);
+  color:#0b0d12; font-weight:900; font-size:0.95rem;
+  box-shadow: 0 8px 24px rgba(78,161,255,0.25), inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.ps-brand { font-weight:800; letter-spacing:-0.01em; font-size:1.05rem; color:#fff; }
+.ps-brand small {
+  display:block; font-weight:500; font-size:0.72rem;
+  color:var(--muted); margin-top:-2px;
+  letter-spacing:0.04em; text-transform:uppercase;
+}
+.ps-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:5px 11px; border-radius:999px;
+  background:var(--surface); border:1px solid var(--line);
+  color:var(--text); font-size:0.78rem; font-weight:600;
+}
+.ps-pill .dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
+
+/* Hero */
+.ps-hero {
+  margin: 4px 0 18px 0;
+  padding: 26px 28px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(800px 240px at 8% -20%, rgba(78,161,255,0.18), transparent 55%),
+    radial-gradient(600px 220px at 92% -10%, rgba(255,122,61,0.14), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+}
+.ps-eyebrow {
+  display:inline-flex; gap:6px; padding:5px 11px; border-radius:999px;
+  background: rgba(78,161,255,0.10); border:1px solid rgba(78,161,255,0.30);
+  color:#b8d6ff; font-size:0.74rem; font-weight:700;
+  letter-spacing:0.06em; text-transform:uppercase;
+}
+.ps-hero h1 {
+  margin: 14px 0 6px 0;
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  line-height:1.06; font-weight:800; letter-spacing:-0.02em; color:#fff;
+}
+.ps-hero h1 span.grad {
+  background: linear-gradient(90deg, #ffffff 0%, #b8d6ff 50%, #ffd0bf 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.ps-hero p { margin:0; color:var(--muted); font-size:1.0rem; max-width:820px; }
+
+/* KPI grid */
+.ps-kpi-grid {
+  display:grid; grid-template-columns: repeat(4, minmax(0,1fr));
+  gap:12px; margin: 10px 0 18px 0;
+}
+@media (max-width: 1100px) { .ps-kpi-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.ps-kpi {
+  padding:14px 16px; border-radius: var(--radius);
+  border:1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  position:relative; overflow:hidden;
+}
+.ps-kpi::after {
+  content:""; position:absolute; inset:0 0 auto 0; height:2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); opacity:.55;
+}
+.ps-kpi-label { font-size:0.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+.ps-kpi-val { font-size:1.55rem; font-weight:800; color:#fff; margin-top:6px; letter-spacing:-0.01em; }
+.ps-kpi-sub { font-size:0.78rem; color:var(--muted); margin-top:4px; }
+
+/* Cards */
+.ps-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  border:1px solid var(--line); border-radius: var(--radius);
+  padding:18px; margin-bottom:14px;
+}
+.ps-card.tight { padding:12px 14px; }
+.ps-section-title {
+  font-size:1.05rem; font-weight:700; color:#fff; letter-spacing:-0.01em; margin:10px 0 12px 0;
+}
+
+/* Button-based nav (replaces st.tabs to fix layout AND enable programmatic navigation) */
+.ps-tabs { margin-bottom: 14px; }
+.ps-tabs > div[data-testid="stHorizontalBlock"] {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px !important;
+  width: fit-content !important;
+}
+.ps-tabs .stButton > button {
+  background: transparent !important;
+  color: var(--muted) !important;
+  border-radius: 9px !important;
+  padding: 8px 16px !important;
+  font-weight: 600 !important;
+  border: 1px solid transparent !important;
+  font-size: 0.92rem !important;
+  white-space: nowrap !important;
+}
+.ps-tabs .stButton > button:hover {
+  color: #fff !important;
+  background: var(--surface-2) !important;
+}
+.ps-tabs .stButton > button[kind="primary"] {
+  background: linear-gradient(180deg, rgba(78,161,255,0.22), rgba(78,161,255,0.08)) !important;
+  color: #fff !important;
+  border-color: rgba(78,161,255,0.40) !important;
+  box-shadow: none !important;
+}
+
+/* Inputs */
+div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput > div > div {
+  background: var(--surface) !important; border-color: var(--line) !important; border-radius: 10px !important;
+}
+
+/* Buttons (default) */
+.stButton > button {
+  border-radius:10px !important; border:1px solid var(--line) !important;
+  background: var(--surface) !important; color: var(--text) !important;
+  font-weight:600 !important;
+}
+.stButton > button:hover { border-color: var(--line-strong) !important; background: var(--surface-2) !important; }
+
+/* Dataframe — strong borders, larger header, bolder body */
+[data-testid="stDataFrame"] {
+  border:1px solid var(--line) !important; border-radius: var(--radius) !important;
+  overflow:hidden !important; width: 100% !important;
+  background: rgba(20, 27, 41, 0.55) !important;
+}
+[data-testid="stDataFrame"] > div { width: 100% !important; }
+[data-testid="stDataFrame"] thead tr th {
+  background: rgba(20, 27, 41, 0.95) !important;
+  color: #c5cee0 !important;
+  font-weight: 700 !important;
+  font-size: 0.78rem !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+[data-testid="stDataFrame"] tbody tr td { color: var(--text) !important; font-size: 0.92rem !important; }
+[data-testid="stDataFrame"] tbody tr:hover td { background: rgba(106,169,255,0.05) !important; }
+
+/* Match row card */
+.match-card {
+  display:grid; grid-template-columns: 1.6fr 1fr 1fr;
+  gap:14px; align-items:center;
+  padding:14px 16px; border-radius: var(--radius);
+  border:1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  margin-bottom: 10px;
+}
+.match-card .meta { color:var(--muted); font-size:0.85rem; }
+.match-card .name { color:#fff; font-weight:700; font-size:1.05rem; letter-spacing:-0.01em; }
+.match-card .center { text-align:center; }
+.match-card .center .vs { color:var(--muted); font-weight:600; letter-spacing:0.06em; font-size:0.78rem; }
+.match-card .right { text-align:right; }
+
+.date-group {
+  margin: 22px 0 8px 0; padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  display:flex; justify-content:space-between; align-items:baseline;
+}
+.date-group .day { color:#fff; font-weight:700; letter-spacing:-0.01em; font-size:1.05rem; }
+.date-group .day .dow { color:var(--muted); font-weight:500; margin-right:8px; text-transform:uppercase; letter-spacing:0.05em; font-size:0.78rem; }
+.date-group .count { color:var(--muted); font-size:0.85rem; }
+
+.win-pill {
+  display:inline-block; padding:4px 10px; border-radius:999px;
+  font-size:0.78rem; font-weight:700;
+  background: rgba(33, 194, 133, 0.14); color:#7ee2b1; border:1px solid rgba(33,194,133,0.30);
+}
+.demo-pill {
+  display:inline-block; padding:4px 10px; border-radius:999px;
+  font-size:0.72rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;
+  background: rgba(255, 200, 80, 0.10); color:#ffcc66; border:1px solid rgba(255,200,80,0.35);
+}
+.live-pill {
+  display:inline-block; padding:4px 10px; border-radius:999px;
+  font-size:0.72rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;
+  background: rgba(33, 194, 133, 0.12); color:#7ee2b1; border:1px solid rgba(33, 194, 133, 0.35);
+}
+
+.bar-bg { width:100%; height:8px; background: rgba(255,255,255,0.08); border-radius:4px; overflow:hidden; margin-top:6px; }
+.bar-fill { height:100%; border-radius:4px; }
+.bar-a { background: linear-gradient(90deg, #ff7059, #ffb27a); }
+.bar-b { background: linear-gradient(90deg, #4ea1ff, #7c5cff); }
+
+.empty-state {
+  text-align:center; padding: 40px 22px;
+  border:1px dashed var(--line); border-radius: var(--radius);
+  color: var(--muted);
+}
+
+/* Player profile header */
+.profile-header { display:flex; gap:18px; align-items:center; padding:18px;
+  border:1px solid var(--line); border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  margin-bottom: 14px;
+}
+.profile-header .avatar img { width:120px; height:120px; border-radius:50%; border:2px solid var(--line-strong); object-fit:cover; background:var(--surface); }
+.profile-header .meta-block .name { font-size:1.6rem; font-weight:800; color:#fff; letter-spacing:-0.02em; }
+.profile-header .meta-block .sub { color:var(--muted); margin-top:4px; }
+</style>
+"""
+st.markdown(CSS, unsafe_allow_html=True)
 
 
-# =========================
-# CSS (single dark glass)
-# =========================
+# =============================================================================
+# Paths
+# =============================================================================
 
-# =========================
-# CSS & Styling
-# =========================
-def get_css() -> str:
-    return """
-    <style>
-    /* Global Clean Up */
-    header[data-testid="stHeader"] { visibility: hidden; height: 0px; }
-    div[data-testid="stToolbar"] { visibility: hidden; height: 0px; }
-    #MainMenu, footer { visibility: hidden; }
-    
-    .block-container { 
-        padding-top: 1.25rem; 
-        padding-bottom: 3rem;
-        max-width: 1280px;
-    }
+PRED_PATH = PROCESSED_DIR / "all_predictions.csv"
+HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
+FIXTURES_PATH = PROCESSED_DIR / "fixtures_upcoming.csv"
+METRICS_PATH = MODELS_DIR / "metrics.json"
+MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
+IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
+FEATURE_COLS_PATH = MODELS_DIR / "feature_columns.txt"
+ASSETS_DIR = PROJECT_ROOT / "assets"
 
-    .ps-shell { margin-bottom: 0.75rem; }
-
-    .ps-topbar {
-        position: sticky;
-        top: 0;
-        z-index: 200;
-        backdrop-filter: blur(14px);
-        background: linear-gradient(to bottom, rgba(14, 17, 23, 0.92), rgba(14, 17, 23, 0.65));
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 14px;
-        padding: 12px 16px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-    }
-    .ps-brand { font-weight: 850; letter-spacing: 0.02em; font-size: 1.05rem; color:#fff;}
-    .ps-badge { opacity: 0.8; font-size: 0.85rem;}
-    .ps-hero {
-        margin-top: 12px;
-        padding: 18px 18px;
-        border-radius: 18px;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: radial-gradient(1200px 400px at 20% -10%, rgba(75,156,255,0.22), transparent 55%),
-                    radial-gradient(800px 300px at 90% -20%, rgba(255,75,75,0.18), transparent 45%),
-                    rgba(255,255,255,0.025);
-    }
-    .ps-hero-h1 {
-        margin: 0;
-        font-size: 2.0rem;
-        line-height: 1.08;
-        font-weight: 900;
-        letter-spacing: -0.02em;
-    }
-    .ps-hero-kicker { margin-top: 8px; opacity: 0.75; font-size: 0.95rem;}
-    .ps-avatar-frame {
-      width: 100%;
-      max-width: 180px;
-      margin: 0 auto;
-      border-radius: 999px;
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.03);
-      aspect-ratio: 1 / 1;
-      display:flex; align-items:center; justify-content:center;
-    }
-    .ps-avatar-frame img { width: 100%; height: auto; display:block; }
-
-    /* Modern Dark Theme Background */
-    .stApp {
-        background-color: #0e1117;
-        background-image: 
-            radial-gradient(circle at 50% 0%, rgba(255, 60, 0, 0.05) 0%, transparent 40%),
-            radial-gradient(circle at 100% 0%, rgba(0, 100, 255, 0.05) 0%, transparent 40%);
-        color: #f0f2f6;
-    }
-
-    /* Cards */
-    .ps-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 16px;
-        padding: 20px;
-        margin-bottom: 16px;
-        backdrop-filter: blur(20px);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-    .ps-card:hover {
-        border-color: rgba(255, 255, 255, 0.15);
-    }
-    
-    .ps-title { 
-        font-size: 1.25rem; 
-        font-weight: 700; 
-        margin-bottom: 8px; 
-        color: #fff;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .ps-metric-label {
-        font-size: 0.85rem;
-        color: rgba(255,255,255,0.6);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .ps-metric-val {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #fff;
-    }
-
-    /* Progress Bars in Tape */
-    .tape-bar-bg {
-        width: 100%;
-        height: 8px;
-        background: rgba(255,255,255,0.1);
-        border-radius: 4px;
-        overflow: hidden;
-        margin-top: 4px;
-    }
-    .tape-bar-fill {
-        height: 100%;
-        border-radius: 4px;
-    }
-    .bar-a { background: linear-gradient(90deg, #ff4b4b, #ff8f8f); }
-    .bar-b { background: linear-gradient(90deg, #4b9cff, #8fbfff); }
-    
-    /* Buttons */
-    .stButton>button {
-        border-radius: 12px !important;
-        font-weight: 600 !important;
-        border: none !important;
-        transition: all 0.2s !important;
-    }
-    
-    </style>
-    """
-
-def inject_css():
-    st.markdown(get_css(), unsafe_allow_html=True)
+NAV = ["Matches", "Upcoming", "Players", "Tournaments", "What-if", "Leaderboard"]
 
 
-def render_site_header(t: Dict[str, str]) -> None:
-    tit = html.escape(str(t.get("title", "Predictive Serve")))
-    head = html.escape(str(t.get("hero_headline", "")))
-    kick = html.escape(str(t.get("hero_kicker", "")))
-    st.markdown(
-        f"""
-        <div class="ps-shell">
-          <div class="ps-topbar">
-            <div class="ps-brand">🎾 {tit}</div>
-          </div>
-          <div class="ps-hero">
-            <h1 class="ps-hero-h1">{head}</h1>
-            <div class="ps-hero-kicker">{kick}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+# =============================================================================
+# Session state
+# =============================================================================
+
+def _init_state() -> None:
+    st.session_state.setdefault("view", "Matches")
+    st.session_state.setdefault("profile_player", None)
+    st.session_state.setdefault("profile_tournament", None)
+
+
+def navigate_to_player(name: str) -> None:
+    st.session_state["view"] = "Players"
+    st.session_state["profile_player"] = str(name)
+
+
+def navigate_to_tournament(name: str) -> None:
+    st.session_state["view"] = "Tournaments"
+    st.session_state["profile_tournament"] = str(name)
+
+
+def navigate_to_view(view: str) -> None:
+    st.session_state["view"] = view
+
+
+# =============================================================================
+# Loaders (cached)
+# =============================================================================
+
+def _coerce_str(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    for c in cols:
+        if c in df.columns:
+            df[c] = (
+                df[c].astype(str)
+                .str.replace(" ", " ", regex=False)
+                .str.strip()
+            )
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_predictions() -> pd.DataFrame:
+    if not PRED_PATH.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(PRED_PATH)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = _coerce_str(df, ["surface", "playerA", "playerB"])
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_history() -> pd.DataFrame:
+    if not HISTORY_PATH.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(HISTORY_PATH, low_memory=False)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if "tourney" in df.columns and "tournament" not in df.columns:
+        df = df.rename(columns={"tourney": "tournament"})
+    df = _coerce_str(df, ["surface", "round", "tournament", "playerA", "playerB"])
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_real_fixtures() -> pd.DataFrame:
+    if not FIXTURES_PATH.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(FIXTURES_PATH)
+    if "match_date" in df.columns and "date" not in df.columns:
+        df = df.rename(columns={"match_date": "date"})
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce")
+    if "tourney" in df.columns and "tournament" not in df.columns:
+        df = df.rename(columns={"tourney": "tournament"})
+    df = _coerce_str(df, ["tournament", "surface", "round", "playerA", "playerB"])
+    for c in ("oddsA", "oddsB"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+@st.cache_resource(show_spinner=False)
+def load_artifacts() -> Tuple[Any, Any, List[str]]:
+    if not (MODEL_PATH.exists() and IMPUTER_PATH.exists() and FEATURE_COLS_PATH.exists()):
+        return None, None, []
+    model = joblib_load(MODEL_PATH)
+    imputer = joblib_load(IMPUTER_PATH)
+    feature_cols = load_feature_list(FEATURE_COLS_PATH)
+    return model, imputer, feature_cols
+
+
+@st.cache_data(show_spinner=False)
+def load_metrics_json() -> Dict[str, Any]:
+    if not METRICS_PATH.exists():
+        return {}
+    try:
+        return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def player_directory(history_df: pd.DataFrame) -> pd.DataFrame:
+    if history_df.empty:
+        return pd.DataFrame(columns=["player", "matches", "wins", "losses", "first_year", "last_year", "winrate"])
+    a = history_df.groupby("playerA").agg(wins=("playerA", "size"), first_a=("date", "min"), last_a=("date", "max"))
+    b = history_df.groupby("playerB").agg(losses=("playerB", "size"), first_b=("date", "min"), last_b=("date", "max"))
+    out = pd.concat([a, b], axis=1).fillna({"wins": 0, "losses": 0})
+    out[["wins", "losses"]] = out[["wins", "losses"]].astype(int)
+    out["matches"] = out["wins"] + out["losses"]
+    out["winrate"] = out["wins"] / out["matches"].replace(0, np.nan)
+    first = pd.concat([out["first_a"], out["first_b"]], axis=1).min(axis=1)
+    last = pd.concat([out["last_a"], out["last_b"]], axis=1).max(axis=1)
+    out["first_year"] = first.dt.year
+    out["last_year"] = last.dt.year
+    out = out.drop(columns=[c for c in ["first_a", "first_b", "last_a", "last_b"] if c in out.columns])
+    out = out.reset_index().rename(columns={"index": "player"})
+    if "playerA" in out.columns:
+        out = out.rename(columns={"playerA": "player"})
+    out = out.sort_values(["matches", "wins"], ascending=[False, False])
+    return out
+
+
+# =============================================================================
+# API-Tennis integration
+# =============================================================================
+
+def _api_key() -> Optional[str]:
+    try_load_dotenv(PROJECT_ROOT)
+    key = getenv("API_TENNIS_KEY")
+    if not key or "PASTE" in key.upper():
+        return None
+    return key
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_recent_api_fixtures() -> List[Dict[str, Any]]:
+    """Pull a wide window of fixtures once for image lookup."""
+    if get_fixtures is None or ApiTennisConfig is None:
+        return []
+    key = _api_key()
+    if not key:
+        return []
+    cfg = ApiTennisConfig(api_key=key, cache_ttl_s=86400)
+    today = dt.date.today()
+    try:
+        return list(get_fixtures(cfg, today - dt.timedelta(days=120), today + dt.timedelta(days=30)))
+    except Exception:
+        return []
+
+
+def _name_aliases(name: str) -> set:
+    """Aliases used to match a 'Sinner J.' style history name with a 'Jannik
+    Sinner' style API name."""
+    if not name:
+        return set()
+    s = name.strip().lower()
+    if not s:
+        return set()
+    aliases = {s}
+    norm = re.sub(r"[.,]", " ", s)
+    norm = re.sub(r"\s+", " ", norm).strip()
+    aliases.add(norm)
+    parts = norm.split()
+    if len(parts) >= 2:
+        first = parts[0]
+        last = parts[-1]
+        # If "X Y" with last part single letter -> it's surname-initial format.
+        if len(last) == 1:
+            aliases.add(first)  # surname
+            aliases.add(f"{last} {first}")  # "j sinner" -> match API "j sinner"-ish
+        else:
+            aliases.add(last)  # surname
+            if len(first) >= 1:
+                aliases.add(f"{last} {first[0]}")  # API to history-style
+    return {a for a in aliases if len(a) >= 2}
+
+
+def _safe_name_match(history_name: str, api_name: str) -> bool:
+    h_aliases = _name_aliases(history_name)
+    a_aliases = _name_aliases(api_name)
+    common = h_aliases & a_aliases
+    # Reject single-letter intersections (too noisy).
+    return any(len(c) >= 3 for c in common)
+
+
+def fetch_player_image_via_api(name: str) -> Optional[Path]:
+    if not name:
+        return None
+    fixtures = cached_recent_api_fixtures()
+    if not fixtures:
+        return None
+    target_url: Optional[str] = None
+    for ev in fixtures:
+        for player_field, logo_field in [
+            ("event_first_player", "event_first_player_logo"),
+            ("event_second_player", "event_second_player_logo"),
+        ]:
+            api_name = (ev.get(player_field) or "").strip()
+            if not api_name:
+                continue
+            if _safe_name_match(name, api_name):
+                logo = (ev.get(logo_field) or "").strip()
+                if logo and logo.startswith("http"):
+                    target_url = logo
+                    break
+        if target_url:
+            break
+    if not target_url:
+        return None
+
+    out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        r = requests.get(target_url, timeout=20)
+        r.raise_for_status()
+        out.write_bytes(r.content)
+        return out
+    except Exception:
+        return None
+
+
+def player_image_html(name: str, size: int = 120) -> str:
+    """Return an inline <img> tag — local cache first, otherwise SVG avatar."""
+    p = ASSETS_DIR / "players" / slugify(name)
+    img = find_image(p)
+    if img and img.exists():
+        try:
+            data = base64.b64encode(img.read_bytes()).decode()
+            ext = img.suffix.lower().lstrip(".")
+            mime = "jpeg" if ext == "jpg" else ext
+            src = f"data:image/{mime};base64,{data}"
+            return (
+                f'<div style="width:{size}px;height:{size}px;border-radius:50%;'
+                f'overflow:hidden;border:2px solid var(--line-strong);background:var(--surface);">'
+                f'<img src="{src}" width="{size}" height="{size}" '
+                f'style="width:100%;height:100%;object-fit:cover;display:block;"/></div>'
+            )
+        except Exception:
+            pass
+    return (
+        f'<img src="{svg_avatar_data_uri(name, size)}" width="{size}" height="{size}" '
+        f'style="border-radius:50%;border:2px solid var(--line-strong);"/>'
     )
 
-def _run_refresh_pipeline() -> Tuple[bool, str]:
-    """
-    Server-side refresh only. Never expose keys to the client.
-    Returns (ok, combined_output).
-    """
+
+def run_real_upcoming_fetch() -> Tuple[bool, str]:
     cmds = [
         [sys.executable, "-m", "src.data.fetch_upcoming_apitennis"],
         [sys.executable, "-m", "src.data.fetch_odds_apitennis"],
@@ -356,8 +598,8 @@ def _run_refresh_pipeline() -> Tuple[bool, str]:
     out: List[str] = []
     for cmd in cmds:
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            out.append(f"$ {' '.join(cmd)}")
+            p = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=180)
+            out.append("$ " + " ".join(cmd))
             if p.stdout:
                 out.append(p.stdout.strip())
             if p.stderr:
@@ -370,1861 +612,1144 @@ def _run_refresh_pipeline() -> Tuple[bool, str]:
     return True, "\n".join([x for x in out if x])
 
 
-# =========================
-# Paths
-# =========================
-MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
-IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
-FEATURE_COLS_PATH = MODELS_DIR / "feature_columns.txt"
+# =============================================================================
+# Helpers
+# =============================================================================
 
-PRED_CANDIDATES = [
-    PROCESSED_DIR / "all_predictions.csv",
-    PROCESSED_DIR / "val_predictions.csv",
-    PROCESSED_DIR / "predictions.csv",
-]
-HISTORY_CANDIDATES = [
-    PROCESSED_DIR / "matches_with_elo_form_sets.csv",
-    PROCESSED_DIR / "train_dataset.csv",
-    PROCESSED_DIR / "matches_with_features.csv",
-]
-
-FIXTURES_CANDIDATES = [
-    PROCESSED_DIR / "fixtures_upcoming.csv",
-    PROCESSED_DIR / "upcoming_fixtures.csv",
-    PROCESSED_DIR / "fixtures.csv",
-    PROJECT_ROOT / "data" / "examples" / "fixtures_upcoming.csv",
-]
-
-ASSETS = AssetPaths(PROJECT_ROOT / "assets")
+def _fmt_pct(x: Optional[float], n: int = 1) -> str:
+    if x is None or pd.isna(x):
+        return "-"
+    return f"{x*100:.{n}f}%"
 
 
-# =========================
-# Utils
-# =========================
-def clean_text(x: Any) -> str:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return ""
-    s = str(x).replace("\u00a0", " ").strip()
-    return " ".join(s.split())
-
-def first_existing(paths: List[Path]) -> Optional[Path]:
-    for p in paths:
-        if p.exists():
-            return p
-    return None
-
-def safe_unique(df: pd.DataFrame, col: str) -> List[str]:
-    if col in df.columns:
-        vals = df[col].dropna().astype(str).map(clean_text)
-        vals = vals[vals != ""]
-        return sorted(vals.unique().tolist())
-    return []
-
-def parse_date_range(val, t: Dict[str, str]) -> Tuple[Optional[Any], Optional[Any], bool]:
-    if val is None:
-        return None, None, False
-    if isinstance(val, (tuple, list)):
-        if len(val) == 2:
-            return val[0], val[1], False
-        if len(val) == 1:
-            return val[0], val[0], True
-        return None, None, False
-    return val, val, True
-
-def normalize_predictions(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "match_date" in df.columns and "date" not in df.columns:
-        df = df.rename(columns={"match_date": "date"})
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    
-    if "tourney" in df.columns and "tournament" not in df.columns:
-        df = df.rename(columns={"tourney": "tournament"})
-
-    if "player_1" in df.columns and "playerA" not in df.columns:
-        df = df.rename(columns={"player_1": "playerA"})
-    if "player_2" in df.columns and "playerB" not in df.columns:
-        df = df.rename(columns={"player_2": "playerB"})
-
-    for c in ["playerA", "playerB", "surface", "tournament", "round"]:
-        if c in df.columns:
-            df[c] = df[c].map(clean_text)
-
-    if "pA" in df.columns and "p_model" not in df.columns:
-        df = df.rename(columns={"pA": "p_model"})
-    if "p_market" in df.columns and "pA_market" not in df.columns:
-        df = df.rename(columns={"p_market": "pA_market"})
-
-    if "p_model" in df.columns and "pA_market" in df.columns and "edge" not in df.columns:
-        df["edge"] = df["p_model"] - df["pA_market"]
-
-    if "y" in df.columns and "winner" not in df.columns and "playerA" in df.columns and "playerB" in df.columns:
-        df["winner"] = np.where(df["y"].astype(int) == 1, df["playerA"], df["playerB"])
-    return df
-
-def normalize_history(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "match_date" in df.columns and "date" not in df.columns:
-        df = df.rename(columns={"match_date": "date"})
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-    if "tourney" in df.columns and "tournament" not in df.columns:
-        df = df.rename(columns={"tourney": "tournament"})
-
-    if "player_1" in df.columns and "playerA" not in df.columns:
-        df = df.rename(columns={"player_1": "playerA"})
-    if "player_2" in df.columns and "playerB" not in df.columns:
-        df = df.rename(columns={"player_2": "playerB"})
-
-    for c in ["playerA", "playerB", "surface", "tournament", "round"]:
-        if c in df.columns:
-            df[c] = df[c].map(clean_text)
-    return df
+def _fmt_num(x: Optional[float], n: int = 4) -> str:
+    if x is None or pd.isna(x):
+        return "-"
+    return f"{x:.{n}f}"
 
 
-def normalize_fixtures(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Fixtures (upcoming matches) schema normalization.
-    Expected columns (best effort): date, tournament, surface, round, playerA, playerB, oddsA, oddsB, match_id
-    """
-    df = df.copy()
-
-    # Rename common alternates
-    if "tourney" in df.columns and "tournament" not in df.columns:
-        df = df.rename(columns={"tourney": "tournament"})
-    if "player_1" in df.columns and "playerA" not in df.columns:
-        df = df.rename(columns={"player_1": "playerA"})
-    if "player_2" in df.columns and "playerB" not in df.columns:
-        df = df.rename(columns={"player_2": "playerB"})
-    if "match_date" in df.columns and "date" not in df.columns:
-        df = df.rename(columns={"match_date": "date"})
-
-    # Parse date
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-    for c in ["tournament", "surface", "round", "playerA", "playerB", "match_id"]:
-        if c in df.columns:
-            df[c] = df[c].map(clean_text)
-
-    # Odds numeric
-    for c in ["oddsA", "oddsB"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    # Minimal required columns check later in UI
-    return df
+def _kpi(label: str, value: str, sub: str = "") -> str:
+    sub_html = f'<div class="ps-kpi-sub">{h(sub)}</div>' if sub else ""
+    return (
+        f'<div class="ps-kpi">'
+        f'<div class="ps-kpi-label">{h(label)}</div>'
+        f'<div class="ps-kpi-val">{h(value)}</div>'
+        f"{sub_html}"
+        f"</div>"
+    )
 
 
-@st.cache_data(show_spinner=False)
-def load_predictions() -> Tuple[pd.DataFrame, str]:
-    path = first_existing(PRED_CANDIDATES)
-    if path is None:
-        raise FileNotFoundError("Predictions not found.")
-    df = pd.read_csv(path)
-    df = normalize_predictions(df)
-
-    # ENRICHMENT: Merge with history to get tournament/round if missing
-    # predictions often lack these columns, but history has them.
-    if "tournament" not in df.columns or df["tournament"].isna().all():
-        hist_path = first_existing(HISTORY_CANDIDATES)
-        if hist_path and hist_path.exists():
-            hdf = pd.read_csv(hist_path)
-            hdf = normalize_history(hdf)
-            
-            # Use a subset to merge
-            cols_to_merge = ["date", "playerA", "playerB"]
-            cols_to_pull = ["tournament", "round"]
-            
-            # Check availability
-            av_cols = [c for c in cols_to_pull if c in hdf.columns and c not in df.columns]
-            
-            if av_cols:
-                # Deduplicate history just in case
-                hdf = hdf.drop_duplicates(subset=cols_to_merge)
-                
-                # DEBUG: Check overlap
-                # common = df.merge(hdf[cols_to_merge], on=cols_to_merge, how="inner")
-                # print(f"DEBUG: Common rows: {len(common)} / {len(df)}")
-                
-                df = df.merge(hdf[cols_to_merge + av_cols], on=cols_to_merge, how="left")
-                
-                # Check match success
-                nulls = df["tournament"].isna().sum()
-                print(f"DEBUG: Tournament nulls after merge: {nulls} / {len(df)}")
-
-    return df, str(path)
-
-@st.cache_data(show_spinner=False)
-def load_history() -> Tuple[pd.DataFrame, str]:
-    path = first_existing(HISTORY_CANDIDATES)
-    if path is None:
-        raise FileNotFoundError("History dataset not found.")
-    df = pd.read_csv(path)
-    df = normalize_history(df)
-    return df, str(path)
-
-@st.cache_resource(show_spinner=False)
-def load_artifacts():
-    model = load(MODEL_PATH)
-    imputer = load(IMPUTER_PATH)
-    try:
-        feature_cols = load_feature_list(FEATURE_COLS_PATH)  # type: ignore
-    except TypeError:
-        feature_cols = load_feature_list(str(FEATURE_COLS_PATH))  # type: ignore
-    return model, imputer, feature_cols
+def confidence_label(p: float) -> str:
+    d = abs(p - 0.5)
+    if d < 0.06:
+        return "Low"
+    if d < 0.14:
+        return "Medium"
+    return "High"
 
 
-@st.cache_data(show_spinner=False)
-def load_fixtures() -> Tuple[pd.DataFrame, str]:
-    path = first_existing(FIXTURES_CANDIDATES)
-    if path is None:
-        raise FileNotFoundError("Fixtures dataset not found.")
-    df = pd.read_csv(path)
-    df = normalize_fixtures(df)
-    return df, str(path)
+def all_tournaments(df: pd.DataFrame) -> List[str]:
+    if df.empty or "tournament" not in df.columns:
+        return []
+    s = df["tournament"].dropna().astype(str).map(lambda x: x.strip())
+    s = s[s != ""]
+    return sorted(s.unique().tolist())
 
 
-@st.cache_data(show_spinner=False)
-def score_fixtures(
-    fixtures_df: pd.DataFrame,
-    history_df: pd.DataFrame,
-    feature_cols: List[str],
-) -> pd.DataFrame:
-    """
-    Batch-score fixtures using the existing single-row feature builder.
-    Notes:
-    - Keeps odds optional.
-    - Uses fixture date as cutoff (no leakage).
-    """
-    required = ["date", "surface", "playerA", "playerB"]
-    for c in required:
-        if c not in fixtures_df.columns:
-            raise ValueError(f"Fixtures missing required column: {c}")
+def render_nav() -> None:
+    info = load_metrics_json()
+    model_label = str(info.get("model", "Model"))
+    val = info.get("validation") or {}
+    pill = "Live model"
+    if isinstance(val.get("logloss"), (int, float)) and isinstance(val.get("accuracy"), (int, float)):
+        pill = f"{model_label} | acc {val['accuracy']*100:.1f}% | log loss {val['logloss']:.3f}"
+    st.markdown(
+        f"""
+        <div class="ps-nav">
+          <div class="ps-nav-left">
+            <div class="ps-logo">PS</div>
+            <div class="ps-brand">Predictive Serve<small>Tennis forecasting console</small></div>
+          </div>
+          <span class="ps-pill"><span class="dot"></span>{h(pill)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Precompute last-seen date for each player in history for fast "has snapshot" checks.
-    last_seen: Dict[str, pd.Timestamp] = {}
-    if {"date", "playerA", "playerB"}.issubset(set(history_df.columns)):
-        hd = history_df[["date", "playerA", "playerB"]].copy()
-        hd["date"] = pd.to_datetime(hd["date"], errors="coerce")
-        hd = hd.dropna(subset=["date"])
-        for col in ["playerA", "playerB"]:
-            tmp = hd[[col, "date"]].dropna()
-            if not tmp.empty:
-                grp = tmp.groupby(col, as_index=True)["date"].max()
-                for k, v in grp.items():
-                    if isinstance(k, str) and pd.notna(v):
-                        last_seen[k] = pd.Timestamp(v)
 
-    rows: List[Dict[str, Any]] = []
-    for _, r in fixtures_df.iterrows():
-        date = r.get("date")
-        surface = r.get("surface")
-        playerA = r.get("playerA")
-        playerB = r.get("playerB")
+def render_hero() -> None:
+    st.markdown(
+        """
+        <div class="ps-hero">
+          <span class="ps-eyebrow">Predictive Serve · ATP forecasting</span>
+          <h1><span class="grad">Match-level forecasts, end-to-end.</span></h1>
+          <p>Historical pipeline 2000-present (67k+ matches), Elo + form + head-to-head features, gradient-boosted model with a held-out 2025 test split, and live ATP fixtures with player photos via API-Tennis.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        if pd.isna(date) or not surface or not playerA or not playerB:
-            continue
 
-        round_code = r.get("round") if "round" in fixtures_df.columns else None
-        oddsA = float(r["oddsA"]) if ("oddsA" in fixtures_df.columns and pd.notna(r.get("oddsA"))) else None
-        oddsB = float(r["oddsB"]) if ("oddsB" in fixtures_df.columns and pd.notna(r.get("oddsB"))) else None
+def render_kpis(df: pd.DataFrame) -> None:
+    if df is None or df.empty or "p_model" not in df.columns or "y" not in df.columns:
+        st.markdown('<div class="empty-state">No predictions available yet. Run the pipeline first.</div>', unsafe_allow_html=True)
+        return
+    sub = df.dropna(subset=["p_model", "y"]).copy()
+    if sub.empty:
+        st.markdown('<div class="empty-state">No scored matches in the current selection.</div>', unsafe_allow_html=True)
+        return
+    from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 
-        # Snapshot availability (best effort): we have history if last match date is before fixture date.
-        snapA_ok = False
-        snapB_ok = False
+    y = sub["y"].astype(int).values
+    p = sub["p_model"].astype(float).values
+    ll = log_loss(y, p)
+    br = brier_score_loss(y, p)
+    ac = accuracy_score(y, (p >= 0.5).astype(int))
+    high_mask = (p < 0.35) | (p > 0.65)
+    high_n = int(high_mask.sum())
+    high_acc = (
+        accuracy_score(y[high_mask], (p[high_mask] >= 0.5).astype(int))
+        if high_n > 0
+        else None
+    )
+
+    tiles = [
+        _kpi("Predictions", f"{len(sub):,}", f"date range {sub['date'].min().date()} - {sub['date'].max().date()}"),
+        _kpi("Pick accuracy", _fmt_pct(ac), "share of correct AI picks"),
+        _kpi("Log loss", _fmt_num(ll), "lower is better"),
+        _kpi("High-confidence accuracy", _fmt_pct(high_acc), f"on {high_n:,} confident calls"),
+    ]
+    st.markdown(f'<div class="ps-kpi-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+
+
+def render_top_nav_buttons() -> None:
+    """Tab-like button row that drives st.session_state['view']."""
+    st.markdown('<div class="ps-tabs">', unsafe_allow_html=True)
+    cols = st.columns(len(NAV))
+    active = st.session_state.get("view", "Matches")
+    for i, name in enumerate(NAV):
+        is_active = name == active
+        kind = "primary" if is_active else "secondary"
+        cols[i].button(
+            name,
+            key=f"nav_btn_{name}",
+            type=kind,
+            on_click=navigate_to_view,
+            args=(name,),
+            width="stretch",
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =============================================================================
+# Selection-driven action buttons
+# =============================================================================
+
+def _render_action_buttons(prefix: str, player_a: Optional[str], player_b: Optional[str], tournament: Optional[str]) -> None:
+    """Buttons that navigate to a profile based on a selected row."""
+    cols = st.columns([1, 1, 1, 3])
+    with cols[0]:
+        if player_a:
+            st.button(
+                f"Open: {player_a}",
+                key=f"{prefix}_pa",
+                on_click=navigate_to_player,
+                args=(player_a,),
+                width="stretch",
+            )
+    with cols[1]:
+        if player_b:
+            st.button(
+                f"Open: {player_b}",
+                key=f"{prefix}_pb",
+                on_click=navigate_to_player,
+                args=(player_b,),
+                width="stretch",
+            )
+    with cols[2]:
+        if tournament:
+            st.button(
+                f"Open: {tournament}",
+                key=f"{prefix}_t",
+                on_click=navigate_to_tournament,
+                args=(tournament,),
+                width="stretch",
+            )
+
+
+# =============================================================================
+# Tab: Matches
+# =============================================================================
+
+def _style_correct_rows(df_for_style: pd.DataFrame, correct_mask: np.ndarray):
+    """Apply pastel green / red row backgrounds based on correctness, plus
+    column-level emphasis on the AI Pick / Confidence cells."""
+    bg_correct = "background-color: rgba(45, 210, 154, 0.13);"
+    bg_wrong = "background-color: rgba(255, 100, 113, 0.13);"
+
+    def _row_color(row):
         try:
-            dts = pd.Timestamp(date)
-            snapA_ok = (playerA in last_seen) and (last_seen[playerA] < dts)
-            snapB_ok = (playerB in last_seen) and (last_seen[playerB] < dts)
+            i = df_for_style.index.get_loc(row.name)
         except Exception:
-            pass
+            return [""] * len(row)
+        if i >= len(correct_mask):
+            return [""] * len(row)
+        return [bg_correct if correct_mask[i] else bg_wrong] * len(row)
 
-        row_df = build_feature_row(
-            history=history_df,
-            feature_cols=feature_cols,
-            playerA=playerA,
-            playerB=playerB,
-            surface=str(surface),
-            date=pd.Timestamp(date),
-            round_code=str(round_code) if (round_code and str(round_code).strip()) else None,
-            oddsA=oddsA,
-            oddsB=oddsB,
+    styler = df_for_style.style.apply(_row_color, axis=1)
+
+    # Bold the columns that drive interpretation
+    bold_cols = [c for c in ("AI Pick", "Actual Winner", "Result") if c in df_for_style.columns]
+    if bold_cols:
+        styler = styler.set_properties(subset=bold_cols, **{"font-weight": "700", "color": "#ffffff"})
+    if "Confidence" in df_for_style.columns:
+        styler = styler.set_properties(
+            subset=["Confidence"],
+            **{"font-weight": "700", "color": "#9bc7ff"},
         )
-        rows.append(
-            {
-                "match_id": r.get("match_id", ""),
-                "date": pd.Timestamp(date),
-                "tournament": r.get("tournament", ""),
-                "round": r.get("round", ""),
-                "surface": str(surface),
-                "playerA": str(playerA),
-                "playerB": str(playerB),
-                "oddsA": oddsA,
-                "oddsB": oddsB,
-                "snapA_ok": int(snapA_ok),
-                "snapB_ok": int(snapB_ok),
-                "feature_row": row_df,
-            }
+    return styler
+
+
+def tab_matches(pred_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Matches Explorer</div>", unsafe_allow_html=True)
+    if pred_df.empty:
+        st.markdown(
+            '<div class="empty-state">No predictions found. Run <code>py -m src.models.score_all_matches</code>.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    surf_opts = sorted(pred_df["surface"].dropna().unique().tolist()) if "surface" in pred_df.columns else []
+    min_d = pd.to_datetime(pred_df["date"].min()).date()
+    max_d = pd.to_datetime(pred_df["date"].max()).date()
+
+    f1, f2, f3 = st.columns([2.4, 2, 1.5])
+    with f1:
+        dr = st.date_input("Date range", value=(max_d - pd.Timedelta(days=180), max_d), key="m_dates")
+        if isinstance(dr, (list, tuple)):
+            if len(dr) == 2:
+                d1, d2 = dr
+            elif len(dr) == 1:
+                d1 = d2 = dr[0]
+            else:
+                d1, d2 = min_d, max_d
+        else:
+            d1 = d2 = dr
+        if d1 is None or d2 is None:
+            d1, d2 = min_d, max_d
+    with f2:
+        sel_surfaces = st.multiselect("Surface", surf_opts, default=surf_opts, key="m_surfaces")
+    with f3:
+        min_conf = st.slider("Minimum AI confidence", 0.50, 0.95, 0.50, 0.01, key="m_minconf")
+
+    f4, f5 = st.columns([2.5, 2])
+    with f4:
+        name_filter = st.text_input("Player contains", value="", placeholder="e.g. Sinner", key="m_name").strip().lower()
+    with f5:
+        result_filter = st.selectbox(
+            "Outcome filter",
+            ["All", "AI was correct", "AI was wrong"],
+            index=0,
+            key="m_result",
         )
 
+    df = pred_df.copy()
+    df = df[(df["date"].dt.date >= d1) & (df["date"].dt.date <= d2)]
+    if sel_surfaces:
+        df = df[df["surface"].isin(sel_surfaces)]
+    df = df.dropna(subset=["p_model"])
+    df["winner_prob"] = np.where(df["p_model"] >= 0.5, df["p_model"], 1.0 - df["p_model"])
+    df["winner_pick"] = np.where(df["p_model"] >= 0.5, df["playerA"], df["playerB"])
+    df = df[df["winner_prob"] >= min_conf]
+    if name_filter:
+        m = (
+            df["playerA"].astype(str).str.lower().str.contains(name_filter, na=False)
+            | df["playerB"].astype(str).str.lower().str.contains(name_filter, na=False)
+        )
+        df = df[m]
+
+    actual_winner = (
+        np.where(df["y"].astype("Int64").fillna(-1).astype(int) == 1, df["playerA"], df["playerB"])
+        if "y" in df.columns
+        else None
+    )
+    if actual_winner is not None and result_filter != "All":
+        correct = df["winner_pick"].values == actual_winner
+        df = df[correct] if result_filter == "AI was correct" else df[~correct]
+        actual_winner = (
+            np.where(df["y"].astype("Int64").fillna(-1).astype(int) == 1, df["playerA"], df["playerB"])
+            if "y" in df.columns
+            else None
+        )
+
+    render_kpis(df)
+    st.markdown(
+        f"<div class='ps-section-title'>Results &middot; {len(df):,} matches</div>",
+        unsafe_allow_html=True,
+    )
+
+    if df.empty:
+        st.markdown('<div class="empty-state">No matches match the current filters.</div>', unsafe_allow_html=True)
+        return
+
+    df = df.sort_values("date", ascending=False).head(500)
+    actual_winner = (
+        np.where(df["y"].astype("Int64").fillna(-1).astype(int) == 1, df["playerA"], df["playerB"])
+        if "y" in df.columns
+        else None
+    )
+    correct_mask = (df["winner_pick"].values == actual_winner) if actual_winner is not None else None
+
+    show = pd.DataFrame({
+        "Date": df["date"].dt.strftime("%Y-%m-%d"),
+        "Surface": df["surface"],
+        "Player A": df["playerA"],
+        "Player B": df["playerB"],
+        "AI Pick": df["winner_pick"],
+        "Confidence": df["winner_prob"] * 100.0,
+    })
+    if actual_winner is not None:
+        show["Actual Winner"] = actual_winner
+        show["Result"] = np.where(correct_mask, "✓", "✗")
+
+    if correct_mask is not None:
+        styled = _style_correct_rows(show, correct_mask).format({"Confidence": "{:.1f}%"})
+        st.dataframe(
+            styled,
+            width="stretch",
+            hide_index=False,
+            height=520,
+        )
+    else:
+        st.dataframe(
+            show,
+            width="stretch",
+            hide_index=True,
+            height=520,
+            column_config={"Confidence": st.column_config.NumberColumn("Confidence", format="%.1f%%")},
+        )
+
+    # Quick navigation: pick a row from the underlying df via select widgets
+    st.caption("Tip: pick any player / tournament below to open their profile.")
+    sel_cols = st.columns([2, 2, 2, 1.5])
+    with sel_cols[0]:
+        a_sel = st.selectbox(
+            "Player A",
+            ["—"] + sorted(df["playerA"].dropna().unique().tolist()),
+            key="m_jump_a",
+        )
+        if a_sel != "—":
+            st.button(f"Open profile: {a_sel}", key="m_open_a", on_click=navigate_to_player, args=(a_sel,), width="stretch")
+    with sel_cols[1]:
+        b_sel = st.selectbox(
+            "Player B",
+            ["—"] + sorted(df["playerB"].dropna().unique().tolist()),
+            key="m_jump_b",
+        )
+        if b_sel != "—":
+            st.button(f"Open profile: {b_sel}", key="m_open_b", on_click=navigate_to_player, args=(b_sel,), width="stretch")
+    with sel_cols[2]:
+        if "tournament" in df.columns:
+            t_sel = st.selectbox(
+                "Tournament",
+                ["—"] + sorted(df["tournament"].dropna().unique().tolist()),
+                key="m_jump_t",
+            )
+            if t_sel != "—":
+                st.button(f"Open: {t_sel}", key="m_open_t", on_click=navigate_to_tournament, args=(t_sel,), width="stretch")
+
+
+# =============================================================================
+# Tab: Upcoming
+# =============================================================================
+
+_TOURNEY_BY_MONTH = {
+    1: [("Australian Open", "Hard"), ("Adelaide", "Hard"), ("United Cup", "Hard")],
+    2: [("Rotterdam", "Hard"), ("Dubai", "Hard"), ("Acapulco", "Hard")],
+    3: [("Indian Wells", "Hard"), ("Miami Open", "Hard")],
+    4: [("Monte Carlo", "Clay"), ("Barcelona", "Clay"), ("Estoril", "Clay")],
+    5: [("Madrid", "Clay"), ("Rome", "Clay"), ("Roland Garros", "Clay")],
+    6: [("Roland Garros", "Clay"), ("Queen's Club", "Grass"), ("Halle", "Grass")],
+    7: [("Wimbledon", "Grass"), ("Hamburg", "Clay"), ("Newport", "Grass")],
+    8: [("Canadian Open", "Hard"), ("Cincinnati", "Hard"), ("US Open", "Hard")],
+    9: [("US Open", "Hard"), ("Laver Cup", "Hard")],
+    10: [("Shanghai", "Hard"), ("Vienna", "Hard"), ("Stockholm", "Hard")],
+    11: [("Paris Masters", "Hard"), ("ATP Finals", "Hard")],
+    12: [("Davis Cup Finals", "Hard"), ("United Cup", "Hard")],
+}
+_ROUNDS = ["R32", "R32", "R16", "R16", "R16", "QF", "QF", "SF", "F"]
+
+
+@st.cache_data(show_spinner=False)
+def synth_fixtures(history_df: pd.DataFrame, days_ahead: int = 14, n_matches: int = 60, seed: int = 7) -> pd.DataFrame:
+    if history_df.empty:
+        return pd.DataFrame()
+    cutoff = history_df["date"].max() - pd.Timedelta(days=365)
+    recent = history_df[history_df["date"] >= cutoff]
+    if recent.empty:
+        recent = history_df.tail(20_000)
+    counts = pd.concat([recent["playerA"], recent["playerB"]]).value_counts()
+    pool = counts.head(48).index.tolist()
+    if len(pool) < 6:
+        return pd.DataFrame()
+    rng = random.Random(seed)
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for i in range(n_matches):
+        a, b = rng.sample(pool, 2)
+        day_offset = rng.randint(0, max(1, days_ahead - 1))
+        match_date = today + pd.Timedelta(days=day_offset)
+        month = match_date.month
+        tour, surface = rng.choice(_TOURNEY_BY_MONTH.get(month, [("Tour Event", "Hard")]))
+        rnd = rng.choice(_ROUNDS)
+        rows.append({
+            "match_id": f"demo-{i:04d}",
+            "date": match_date,
+            "tournament": tour,
+            "surface": surface,
+            "round": rnd,
+            "playerA": a,
+            "playerB": b,
+            "oddsA": np.nan,
+            "oddsB": np.nan,
+            "_source": "demo",
+        })
+    df = pd.DataFrame(rows).sort_values(["date", "tournament", "playerA"])
+    return df
+
+
+def _score_fixtures(fix_df: pd.DataFrame, history_df: pd.DataFrame) -> pd.DataFrame:
+    model, imputer, feature_cols = load_artifacts()
+    if model is None or imputer is None or not feature_cols or build_feature_row is None:
+        return pd.DataFrame()
+    rows = []
+    for _, r in fix_df.iterrows():
+        try:
+            row_df = build_feature_row(
+                history=history_df,
+                feature_cols=feature_cols,
+                playerA=str(r["playerA"]),
+                playerB=str(r["playerB"]),
+                surface=str(r["surface"]),
+                date=pd.Timestamp(r["date"]),
+                round_code=str(r.get("round") or "") or None,
+                oddsA=float(r["oddsA"]) if pd.notna(r.get("oddsA")) else None,
+                oddsB=float(r["oddsB"]) if pd.notna(r.get("oddsB")) else None,
+            )
+            X = imputer.transform(row_df[feature_cols])
+            p = float(model.predict_proba(X)[0, 1])
+        except Exception:
+            continue
+        rows.append({
+            "date": pd.Timestamp(r["date"]),
+            "tournament": r.get("tournament", ""),
+            "round": r.get("round", ""),
+            "surface": r["surface"],
+            "playerA": r["playerA"],
+            "playerB": r["playerB"],
+            "p_model": p,
+            "_source": r.get("_source", "real"),
+        })
     if not rows:
         return pd.DataFrame()
-
     out = pd.DataFrame(rows)
-
-    # Predict
-    model, imputer, _ = load_artifacts()
-    X = pd.concat(out["feature_row"].tolist(), ignore_index=True)
-    X_imp = imputer.transform(X[feature_cols])
-    out["p_model"] = model.predict_proba(X_imp)[:, 1].astype(float)
-    out = out.drop(columns=["feature_row"])
-
-    # Market implied prob and edge when odds exist
-    if out["oddsA"].notna().any() and out["oddsB"].notna().any():
-        invA = 1.0 / out["oddsA"].astype(float)
-        invB = 1.0 / out["oddsB"].astype(float)
-        denom = invA + invB
-        out["pA_market"] = invA / denom
-        out["edge"] = out["p_model"] - out["pA_market"]
-    else:
-        out["pA_market"] = np.nan
-        out["edge"] = np.nan
-
+    out["winner_prob"] = np.where(out["p_model"] >= 0.5, out["p_model"], 1.0 - out["p_model"])
+    out["winner_pick"] = np.where(out["p_model"] >= 0.5, out["playerA"], out["playerB"])
     return out
 
 
-def apply_global_filters(df: pd.DataFrame, d1, d2, surfaces: List[str]) -> pd.DataFrame:
-    out = df.copy()
-    if d1 and d2 and "date" in out.columns:
-        out = out[(out["date"].dt.date >= d1) & (out["date"].dt.date <= d2)]
-    if surfaces and "surface" in out.columns:
-        out = out[out["surface"].isin(surfaces)]
-    return out
+def tab_upcoming(history_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Upcoming Fixtures</div>", unsafe_allow_html=True)
 
+    real = load_real_fixtures()
+    has_real = not real.empty
+    has_key = _api_key() is not None
 
-def apply_match_filters(df: pd.DataFrame, player_pick: str, tournaments: List[str],
-                        only_market: bool, only_model: bool, min_edge: Optional[float]) -> pd.DataFrame:
-    out = df.copy()
+    if has_real:
+        # show only future
+        real = real.copy()
+        real["date"] = pd.to_datetime(real["date"], errors="coerce")
+        real = real.dropna(subset=["date", "playerA", "playerB", "surface"])
+        real = real[real["date"] >= pd.Timestamp.today().normalize()]
+        if real.empty:
+            has_real = False
 
-    if player_pick and player_pick != "__ALL__":
-        a = out.get("playerA", pd.Series("", index=out.index)).astype(str)
-        b = out.get("playerB", pd.Series("", index=out.index)).astype(str)
-        out = out[(a == player_pick) | (b == player_pick)]
-
-    if tournaments and "tournament" in out.columns:
-        out = out[out["tournament"].isin(tournaments)]
-
-    if only_market and "pA_market" in out.columns:
-        out = out[out["pA_market"].notna()]
-    if only_model and "p_model" in out.columns:
-        out = out[out["p_model"].notna()]
-
-    if (min_edge is not None) and ("edge" in out.columns):
-        out = out[out["edge"] >= min_edge]
-
-    return out
-
-
-def confidence_label(pA: float, t: Dict[str, str]) -> str:
-    d = abs(pA - 0.5)
-    if d < 0.05:
-        return t["low"]
-    if d < 0.12:
-        return t["medium"]
-    return t["high"]
-
-def predict_from_row(model, imputer, feature_cols: List[str], row_df: pd.DataFrame) -> float:
-    X = row_df[feature_cols].copy()
-    X_imp = imputer.transform(X)
-    return float(model.predict_proba(X_imp)[0, 1])
-
-
-def render_kpis(df: pd.DataFrame, t: Dict[str, str]):
-    st.markdown(f"### {t['metrics']}")
-    if compute_overall_metrics is None:
-        st.info("Metrics module not available.")
-        return
-    if df.empty:
-        st.warning("No data for selected filters.")
-        return
-    m = compute_overall_metrics(df)
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1:
-        st.metric(t["model_logloss"], f"{m.model_logloss:.4f}", help="LogLoss: Hata cezalandırma puanıdır. 0'a ne kadar yakınsa, model o kadar 'emin' ve 'doğru'dur. (Düşük = İyi)")
-    with c2:
-        st.metric(t["model_brier"], f"{m.model_brier:.4f}", help="Brier Score: Tahmin sapmasıdır. 0 = Mükemmel tahmin. (Düşük = İyi)")
-    with c3:
-        st.metric(t["model_acc"], f"{m.model_acc:.3f}", help="Sadece kazananı bilme oranıdır. (Yüksek = İyi)")
-    with c4:
-        st.metric(t["market_logloss"], "—" if m.market_logloss is None else f"{m.market_logloss:.4f}", help="Marketin (Bahis bürolarının) hata puanı.")
-    with c5:
-        st.metric(t["market_brier"], "—" if m.market_brier is None else f"{m.market_brier:.4f}")
-    with c6:
-        st.metric(t["market_acc"], "—" if m.market_acc is None else f"{m.market_acc:.3f}")
-
-
-
-
-# =========================
-# Visualizations
-# =========================
-def render_match_card(row: pd.Series, t: Dict[str, str]):
-    """Renders a beautiful card for a historical match."""
-    
-    # Extract data securely
-    def val(k): return row[k] if k in row.index else None
-    
-    date = pd.to_datetime(val("date")).strftime("%Y-%m-%d") if val("date") else "Unknown Date"
-    tourn = val("tournament") or "Unknown Tournament"
-    surface = val("surface") or "Unknown Surface"
-    round_ = val("round") or ""
-    
-    pA = val("p_model")
-    pMarket = val("pA_market")
-    edge = val("edge")
-    
-    winner = val("winner")
-    playerA = val("playerA")
-    playerB = val("playerB")
-    
-    # --- Explainability Logic (Key Factors) ---
-    factors = []
-    
-    # helper for safe floats
-    def fgap(k_a, k_b):
-        va = val(k_a) if val(k_a) else 0
-        vb = val(k_b) if val(k_b) else 0
-        return va - vb
-
-    # 1. Elo Diff
-    elo_d = fgap("eloA", "eloB")
-    if abs(elo_d) > 20:
-        adv = playerA if elo_d > 0 else playerB
-        factors.append(f"🏆 <b>Genel Güç (Elo):</b> {adv}, rakibinden daha yüksek puana sahip fark ({abs(elo_d):.0f}).")
-    
-    # 2. Surface Elo Diff
-    surf_d = fgap("elo_surfaceA", "elo_surfaceB")
-    if abs(surf_d) > 20:
-        adv = playerA if surf_d > 0 else playerB
-        if adv != (playerA if elo_d > 0 else playerB): 
-             factors.append(f"🎾 <b>Zemin Uyumu ({surface}):</b> {adv}, bu zeminde daha başarılı ({abs(surf_d):.0f} puan fark).")
-
-    # 3. Form Diff (Last 5 matches winrate)
-    form_d = fgap("form_winrateA_5", "form_winrateB_5")
-    if abs(form_d) > 0.1: # 10% diff
-        adv = playerA if form_d > 0 else playerB
-        factors.append(f"🔥 <b>Form Durumu:</b> {adv} son maçlarda daha formda (+%{abs(form_d)*100:.0f}).")
-        
-    factors_html = ""
-    if factors:
-         lis = "".join([f"<li style='margin-bottom:4px;'>{f}</li>" for f in factors])
-         factors_html = f"""
-         <div style="margin-top: 15px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; font-size: 0.85rem;">
-            <div style="opacity: 0.7; font-weight: bold; margin-bottom: 6px;">💡 Neden bu tahmin? (Öne Çıkanlar)</div>
-            <ul style="padding-left: 20px; opacity: 0.8;">{lis}</ul>
-         </div>
-         """
-
-    # --- Consolidated Metrics Logic ---
-    # 1. Determine who is predicted (A if p>=0.5 else B)
-    pred_is_A = (pA >= 0.5)
-    pred_player = playerA if pred_is_A else playerB
-    
-    # 2. Align metrics to the Predicted Player
-    
-    # AI Confidence (Flip if predicting B)
-    display_prob = pA if pred_is_A else (1.0 - pA)
-    display_prob_str = f"{display_prob*100:.1f}%" if pd.notna(display_prob) else "—"
-
-    # Market Odds (Flip if predicting B)
-    pMarket_val = pMarket
-    if pMarket_val is not None:
-        if abs(pMarket_val) <= 1.0:
-            if not pred_is_A: pMarket_val = 1.0 - pMarket_val
-            pMarket_val *= 100 # scale to %
+    # Toolbar: API key status + refresh
+    bar1, bar2 = st.columns([3, 1.6])
+    with bar1:
+        if has_real:
+            st.markdown('<span class="live-pill">live fixtures</span>', unsafe_allow_html=True)
+            st.caption(f"Loaded from `{FIXTURES_PATH}`")
+        elif has_key:
+            st.markdown('<span class="demo-pill">demo data</span>', unsafe_allow_html=True)
+            st.caption("API key detected — click the refresh button to pull live ATP fixtures.")
         else:
-            # Already %? (e.g. 34.0)
-            if not pred_is_A: pMarket_val = 100.0 - pMarket_val
-    pMarket_fmt = f"{pMarket_val:.1f}%" if pd.notna(pMarket_val) else "—"
-
-    # Edge (Flip SIGN if predicting B)
-    edge_val = edge
-    if edge_val is not None:
-        # Edge is defined as pModel - pMarket.
-        # If we flipped both pModel and pMarket (1-p), the diff becomes (1-pA) - (1-pM) = pM - pA = - (pA - pM) = -Edge.
-        if not pred_is_A: edge_val = -1.0 * edge_val
-        if abs(edge_val) <= 1.0: edge_val *= 100 # scale to %
-    edge_fmt = f"{edge_val:+.1f}%" if pd.notna(edge_val) else "—"
-
-    html_content = f"""<div class="ps-card"><div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; opacity: 0.7; font-size: 0.9rem;"><span>📅 {date}</span><span>🏆 {tourn} ({surface}) {round_}</span></div><div style="display: flex; align-items: center; justify: space-around; margin: 20px 0;"><div style="text-align: center;"><div style="font-size: 1.8rem; font-weight: {800 if winner == playerA else 400}; color: {'#ff4b4b' if winner == playerA else 'inherit'};">{playerA}</div></div><div style="font-size: 1.2rem; font-weight: bold; opacity: 0.5;">VS</div><div style="text-align: center;"><div style="font-size: 1.8rem; font-weight: {800 if winner == playerB else 400}; color: {'#4b9cff' if winner == playerB else 'inherit'};">{playerB}</div></div></div><div style="margin-top: 25px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;"><div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center;"><div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 12px;"><div class="ps-metric-label">🤖 AI Prediction</div><div class="ps-metric-val">{display_prob_str}</div><div style="font-size: 0.8rem; opacity: 0.6;">for {pred_player}</div></div><div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 12px;"><div class="ps-metric-label">🏦 Market Odds</div><div class="ps-metric-val">{pMarket_fmt}</div><div style="font-size: 0.8rem; opacity: 0.6;">Implied Prob.</div></div><div style="background: {'rgba(40, 200, 64, 0.15)' if (edge_val and edge_val > 0) else 'rgba(255,255,255,0.05)'}; padding: 10px; border-radius: 12px; border: { '1px solid #4ade80' if (edge_val and edge_val > 5.0) else 'none'};"><div class="ps-metric-label">💎 Value (Edge)</div><div class="ps-metric-val" style="color: {'#4ade80' if (edge_val and edge_val > 0) else 'inherit'};">{edge_fmt}</div><div style="font-size: 0.8rem; opacity: {1 if (edge_val and edge_val > 5.0) else 0.6}; color: {'#4ade80' if (edge_val and edge_val > 5.0) else 'inherit'};">{ "🌟 GOOD BET" if (edge_val and edge_val > 5.0) else "No Value" }</div></div></div>{factors_html}</div></div>"""
-    
-    st.markdown(html_content, unsafe_allow_html=True)
-
-def _player_elo_series(history_df: pd.DataFrame, player: str) -> pd.DataFrame:
-    """Long-form Elo series for a single player."""
-    df = history_df.copy()
-    if "date" not in df.columns:
-        return pd.DataFrame(columns=["date", "elo", "elo_surface"])
-    df = df[df["date"].notna()].copy()
-    maskA = df.get("playerA", pd.Series("", index=df.index)).astype(str) == player
-    maskB = df.get("playerB", pd.Series("", index=df.index)).astype(str) == player
-    a = df.loc[maskA, ["date"]].copy()
-    b = df.loc[maskB, ["date"]].copy()
-    a["elo"] = pd.to_numeric(df.loc[maskA].get("eloA", np.nan), errors="coerce")
-    b["elo"] = pd.to_numeric(df.loc[maskB].get("eloB", np.nan), errors="coerce")
-    a["elo_surface"] = pd.to_numeric(df.loc[maskA].get("elo_surfaceA", np.nan), errors="coerce")
-    b["elo_surface"] = pd.to_numeric(df.loc[maskB].get("elo_surfaceB", np.nan), errors="coerce")
-    out = pd.concat([a, b], ignore_index=True)
-    out = out.dropna(subset=["date"]).sort_values("date")
-    return out
-
-
-def _player_recent_matches(history_df: pd.DataFrame, player: str, limit: int = 50) -> pd.DataFrame:
-    df = history_df.copy()
-    if "date" in df.columns:
-        df = df[df["date"].notna()].copy()
-    a0 = df.get("playerA", pd.Series("", index=df.index)).astype(str)
-    b0 = df.get("playerB", pd.Series("", index=df.index)).astype(str)
-    df = df[(a0 == player) | (b0 == player)].copy()
-    if df.empty:
-        return df
-    df = df.sort_values("date", ascending=False)
-    # Recompute A/B on the filtered frame to avoid length mismatch
-    a = df.get("playerA", pd.Series("", index=df.index)).astype(str)
-    b = df.get("playerB", pd.Series("", index=df.index)).astype(str)
-    df["opponent"] = np.where(a == player, b, a)
-    # Determine win best-effort
-    if "winner" in df.columns:
-        df["result"] = np.where(df["winner"].astype(str) == player, "W", "L")
-    else:
-        # In matches_with_* pipeline, playerA is winner at that stage
-        df["result"] = np.where(a == player, "W", "L")
-    cols = [c for c in ["date", "tournament", "round", "surface", "opponent", "result"] if c in df.columns]
-    return df[cols].head(limit).copy()
-
-
-def render_player_profile(player: str, history_df: pd.DataFrame, pred_df: pd.DataFrame):
-    st.markdown("<div class='ps-card'><div class='ps-title'>👤 Player Profile</div></div>", unsafe_allow_html=True)
-
-    img = find_image(ASSETS.players / slugify(player))
-    c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
-    with c1:
-        if img:
-            st.image(str(img), use_container_width=True)
-        else:
-            st.markdown(
-                f"<div class='ps-avatar-frame'><img src='{svg_avatar_data_uri(player)}' alt=''/></div>",
-                unsafe_allow_html=True,
+            st.markdown('<span class="demo-pill">demo data &middot; no api key</span>', unsafe_allow_html=True)
+            st.caption(
+                "Create a `.env` file in the project root with "
+                "`API_TENNIS_KEY=<your key>` to enable live fixtures."
             )
-    with c2:
-        st.markdown(f"### {player}")
-        st.caption("Elo, form, and match history based on the processed dataset.")
+    with bar2:
+        disabled = not has_key
+        if st.button("Refresh fixtures from API", key="u_refresh", disabled=disabled, width="stretch"):
+            with st.spinner("Calling api-tennis.com..."):
+                ok, log_text = run_real_upcoming_fetch()
+                load_real_fixtures.clear()
+            if ok:
+                st.success("Fixtures updated.")
+            else:
+                st.error("Refresh failed.")
+            with st.expander("Refresh log", expanded=not ok):
+                st.code(log_text or "(empty)", language="text")
+            st.rerun()
 
-    series = _player_elo_series(history_df, player)
-    recent = _player_recent_matches(history_df, player, limit=50)
-    # Full matchset for deeper stats
-    full = history_df.copy()
-    if "date" in full.columns:
-        full["date"] = pd.to_datetime(full["date"], errors="coerce")
-        full = full[full["date"].notna()].copy()
-    a = full.get("playerA", pd.Series("", index=full.index)).astype(str)
-    b = full.get("playerB", pd.Series("", index=full.index)).astype(str)
-    full = full[(a == player) | (b == player)].copy()
-    if not full.empty:
-        # Recompute A/B on the filtered frame to avoid length mismatch
-        a2 = full.get("playerA", pd.Series("", index=full.index)).astype(str)
-        b2 = full.get("playerB", pd.Series("", index=full.index)).astype(str)
-        full["opponent"] = np.where(a2 == player, b2, a2)
-        if "winner" in full.columns:
-            full["result"] = np.where(full["winner"].astype(str) == player, "W", "L")
-        else:
-            full["result"] = np.where(a2 == player, "W", "L")
-
-    # KPIs
-    matches = int(len(recent)) if not recent.empty else 0
-    wins = int((recent.get("result") == "W").sum()) if ("result" in recent.columns) else 0
-    win_rate = (wins / matches * 100.0) if matches > 0 else np.nan
-    elo_last = float(series["elo"].dropna().iloc[-1]) if (not series.empty and series["elo"].notna().any()) else np.nan
-    elo_s_last = float(series["elo_surface"].dropna().iloc[-1]) if (not series.empty and series["elo_surface"].notna().any()) else np.nan
-
-    with c3:
-        st.metric("Matches", f"{matches:,}")
-        st.metric("Win rate", "—" if pd.isna(win_rate) else f"{win_rate:.1f}%")
-    with c4:
-        st.metric("Latest Elo", "—" if pd.isna(elo_last) else f"{elo_last:.0f}")
-        st.metric("Latest Surface Elo", "—" if pd.isna(elo_s_last) else f"{elo_s_last:.0f}")
-
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>📈 Elo (history)</div>", unsafe_allow_html=True)
-    if series.empty:
-        st.caption("No Elo history found for this player.")
+    # Choose data source
+    if has_real:
+        fix = real
     else:
-        plot_df = series.dropna(subset=["elo"]).copy()
-        chart = (
-            alt.Chart(plot_df)
-            .mark_line(opacity=0.9, strokeWidth=3)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("elo:Q", title="Elo", scale=alt.Scale(zero=False)),
-                tooltip=["date:T", "elo:Q"],
-            )
+        fix = synth_fixtures(history_df)
+
+    if fix.empty:
+        st.markdown('<div class="empty-state">Could not generate any fixtures (history dataset empty).</div>', unsafe_allow_html=True)
+        return
+
+    available_days = sorted(fix["date"].dt.date.unique().tolist())
+    day_labels = [d.strftime("%a %b %d, %Y") for d in available_days]
+
+    f1, f2, f3, f4 = st.columns([1.6, 2, 2, 1.2])
+    with f1:
+        day_choice = st.selectbox("Day", ["All days"] + day_labels, index=0, key="u_day")
+    with f2:
+        tour_opts = all_tournaments(fix)
+        sel_tours = st.multiselect("Tournament", tour_opts, default=[], key="u_tours")
+    with f3:
+        surf_opts = sorted(fix["surface"].dropna().unique().tolist())
+        sel_surfaces = st.multiselect("Surface", surf_opts, default=surf_opts, key="u_surfaces")
+    with f4:
+        min_conf = st.slider("Min confidence", 0.50, 0.95, 0.55, 0.01, key="u_minconf")
+
+    if day_choice != "All days":
+        idx = day_labels.index(day_choice)
+        fix = fix[fix["date"].dt.date == available_days[idx]]
+    if sel_tours:
+        fix = fix[fix["tournament"].isin(sel_tours)]
+    if sel_surfaces:
+        fix = fix[fix["surface"].isin(sel_surfaces)]
+    if fix.empty:
+        st.markdown('<div class="empty-state">No fixtures match the current filters.</div>', unsafe_allow_html=True)
+        return
+
+    sc = _score_fixtures(fix, history_df)
+    if sc.empty:
+        st.markdown(
+            '<div class="empty-state">Could not score fixtures (model artifacts or history snapshots missing).</div>',
+            unsafe_allow_html=True,
         )
-        st.altair_chart(chart, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Performance breakdowns
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>📊 Performance breakdown</div>", unsafe_allow_html=True)
-    if full.empty:
-        st.caption("No matches available for breakdown.")
-    else:
-        # Surface win rates
-        if "surface" in full.columns:
-            surf = full[["surface", "result"]].dropna().copy()
-            if not surf.empty:
-                agg = (
-                    surf.assign(win=(surf["result"] == "W").astype(int), match=1)
-                    .groupby("surface", as_index=False)
-                    .agg(matches=("match", "sum"), wins=("win", "sum"))
-                )
-                agg["win_rate"] = (agg["wins"] / agg["matches"]) * 100.0
-                agg = agg.sort_values(["matches", "win_rate"], ascending=[False, False])
-                cbs1, cbs2 = st.columns([1, 1])
-                with cbs1:
-                    st.markdown("**By surface**")
-                    st.dataframe(
-                        agg.rename(columns={"surface": "Surface", "matches": "Matches", "wins": "Wins", "win_rate": "Win Rate (%)"})
-                        .round({"Win Rate (%)": 1}),
-                        use_container_width=True,
-                        hide_index=True,
-                        height=240,
-                    )
-                with cbs2:
-                    st.markdown("**Surface win rate chart**")
-                    st.altair_chart(
-                        alt.Chart(agg).mark_bar().encode(
-                            x=alt.X("win_rate:Q", title="Win Rate (%)"),
-                            y=alt.Y("surface:N", sort="-x", title="Surface"),
-                            tooltip=["surface", "matches", "wins", alt.Tooltip("win_rate:Q", format=".1f")],
-                        ),
-                        use_container_width=True,
-                    )
-
-        # Best tournaments (by win rate, min matches)
-        if "tournament" in full.columns:
-            tour = full[["tournament", "result"]].dropna().copy()
-            if not tour.empty:
-                agg2 = (
-                    tour.assign(win=(tour["result"] == "W").astype(int), match=1)
-                    .groupby("tournament", as_index=False)
-                    .agg(matches=("match", "sum"), wins=("win", "sum"))
-                )
-                agg2["win_rate"] = (agg2["wins"] / agg2["matches"]) * 100.0
-                agg2 = agg2[agg2["matches"] >= 5].sort_values(["win_rate", "matches"], ascending=[False, False]).head(15)
-                st.markdown("**Best tournaments (min 5 matches)**")
-                st.dataframe(
-                    agg2.rename(columns={"tournament": "Tournament", "matches": "Matches", "wins": "Wins", "win_rate": "Win Rate (%)"})
-                    .round({"Win Rate (%)": 1}),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=280,
-                )
-                # Quick navigation to tournament profile
-                tourn_opts = ["—"] + agg2["tournament"].astype(str).tolist()
-                pick_t = st.selectbox("Open a tournament profile", options=tourn_opts, index=0, key="player_best_tourn_pick")
-                if pick_t != "—" and st.button("Open Tournament Profile", key="open_tournament_from_player"):
-                    st.session_state["profile_tournament"] = str(pick_t)
-                    st.info("Go to the **Tournaments** tab (preselected).")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # H2H module
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>🤝 Head-to-head (H2H)</div>", unsafe_allow_html=True)
-    if full.empty:
-        st.caption("No match history to compute H2H.")
-    else:
-        opps = sorted(set([clean_text(x) for x in full["opponent"].dropna().astype(str).tolist() if clean_text(x)]))
-        if not opps:
-            st.caption("No opponents found.")
-        else:
-            opp = st.selectbox("Select opponent", options=opps, index=0, key="h2h_opponent_select")
-
-            h2h_df = full[full["opponent"].astype(str) == opp].copy()
-            total_h2h = len(h2h_df)
-            wins_h2h = int((h2h_df["result"] == "W").sum()) if "result" in h2h_df.columns else 0
-            wr_h2h = (wins_h2h / total_h2h * 100.0) if total_h2h > 0 else np.nan
-
-            # Latest snapshots for both players (best effort from last match involving each)
-            def last_snapshot(p: str) -> Tuple[float, float, float]:
-                s = _player_elo_series(history_df, p)
-                elo = float(s["elo"].dropna().iloc[-1]) if (not s.empty and s["elo"].notna().any()) else np.nan
-                es = float(s["elo_surface"].dropna().iloc[-1]) if (not s.empty and s["elo_surface"].notna().any()) else np.nan
-                # approximate recent form from last 10 matches in full for that player
-                pm = _player_recent_matches(history_df, p, limit=10)
-                if not pm.empty and "result" in pm.columns:
-                    f = float((pm["result"] == "W").mean() * 100.0)
-                else:
-                    f = np.nan
-                return elo, es, f
-
-            elo_p, eloS_p, form_p = last_snapshot(player)
-            elo_o, eloS_o, form_o = last_snapshot(opp)
-
-            c_h1, c_h2, c_h3, c_h4 = st.columns(4)
-            with c_h1:
-                st.metric("H2H matches", f"{total_h2h:,}")
-            with c_h2:
-                st.metric("H2H win rate", "—" if pd.isna(wr_h2h) else f"{wr_h2h:.1f}%")
-            with c_h3:
-                st.metric("Elo (you vs opp)", f"{elo_p:.0f} vs {elo_o:.0f}" if (pd.notna(elo_p) and pd.notna(elo_o)) else "—")
-            with c_h4:
-                st.metric("Form10 (you vs opp)", f"{form_p:.0f}% vs {form_o:.0f}%" if (pd.notna(form_p) and pd.notna(form_o)) else "—")
-
-            cols = [c for c in ["date", "tournament", "round", "surface", "result"] if c in h2h_df.columns]
-            if "date" in h2h_df.columns:
-                h2h_df = h2h_df.sort_values("date", ascending=False)
-            st.dataframe(h2h_df[cols].head(30), use_container_width=True, hide_index=True, height=320)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Last 12 months form (rolling)
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>🧭 Form (last 12 months)</div>", unsafe_allow_html=True)
-    if full.empty or "date" not in full.columns:
-        st.caption("No data for form trend.")
-    else:
-        cutoff = pd.Timestamp.today() - pd.Timedelta(days=365)
-        f12 = full[full["date"] >= cutoff].sort_values("date").copy()
-        if f12.empty:
-            st.caption("No matches in last 12 months.")
-        else:
-            f12["win"] = (f12["result"] == "W").astype(int)
-            f12["rolling_wr_10"] = f12["win"].rolling(10, min_periods=3).mean() * 100.0
-            chart = alt.Chart(f12).mark_line(opacity=0.9, strokeWidth=3).encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("rolling_wr_10:Q", title="Rolling win rate (last 10 matches, %)"),
-                tooltip=["date:T", "result", "opponent", alt.Tooltip("rolling_wr_10:Q", format=".1f")],
-            )
-            st.altair_chart(chart, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>🗓️ Recent matches</div>", unsafe_allow_html=True)
-    if recent.empty:
-        st.caption("No matches found.")
-    else:
-        st.dataframe(recent, use_container_width=True, hide_index=True, height=420)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_tournament_profile(tournament: str, history_df: pd.DataFrame, pred_df: pd.DataFrame):
-    st.markdown("<div class='ps-card'><div class='ps-title'>🏆 Tournament Profile</div></div>", unsafe_allow_html=True)
-
-    img = find_image(ASSETS.tournaments / slugify(tournament))
-    c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
-    with c1:
-        if img:
-            st.image(str(img), use_container_width=True)
-    with c2:
-        st.markdown(f"### {tournament}")
-        st.caption("Tournament match history and surface/round distribution.")
-
-    df = history_df.copy()
-    if "tournament" not in df.columns:
-        st.warning("Tournament column not present in history dataset.")
         return
-    df = df[df["tournament"].astype(str) == tournament].copy()
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notna()].copy()
 
-    total = len(df)
-    first_date = df["date"].min().date() if (total > 0 and "date" in df.columns) else None
-    last_date = df["date"].max().date() if (total > 0 and "date" in df.columns) else None
-    surface_mode = df["surface"].mode().iloc[0] if (total > 0 and "surface" in df.columns and df["surface"].notna().any()) else "—"
+    sc = sc[sc["winner_prob"] >= min_conf].sort_values(["date", "winner_prob"], ascending=[True, False])
 
-    with c3:
-        st.metric("Matches", f"{total:,}")
-        st.metric("Surface (mode)", str(surface_mode))
-    with c4:
-        st.metric("First date", "—" if first_date is None else str(first_date))
-        st.metric("Last date", "—" if last_date is None else str(last_date))
+    st.markdown(
+        f"<div class='ps-section-title'>{len(sc):,} matches scored</div>",
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>📊 Distribution</div>", unsafe_allow_html=True)
-    cdist1, cdist2 = st.columns(2)
-    with cdist1:
-        if total > 0 and "surface" in df.columns:
-            s_cnt = df["surface"].value_counts().reset_index()
-            s_cnt.columns = ["surface", "count"]
-            st.altair_chart(
-                alt.Chart(s_cnt).mark_bar().encode(x="count:Q", y=alt.Y("surface:N", sort="-x"), tooltip=["surface", "count"]),
-                use_container_width=True,
-            )
-    with cdist2:
-        if total > 0 and "round" in df.columns:
-            r_cnt = df["round"].fillna("—").astype(str).value_counts().head(15).reset_index()
-            r_cnt.columns = ["round", "count"]
-            st.altair_chart(
-                alt.Chart(r_cnt).mark_bar().encode(x="count:Q", y=alt.Y("round:N", sort="-x"), tooltip=["round", "count"]),
-                use_container_width=True,
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
+    for day, group in sc.groupby(sc["date"].dt.date):
+        day_dt = pd.Timestamp(day)
+        st.markdown(
+            f"""
+            <div class="date-group">
+              <div class="day"><span class="dow">{day_dt.strftime('%a')}</span>{day_dt.strftime('%B %d, %Y')}</div>
+              <div class="count">{len(group)} match{'es' if len(group) != 1 else ''}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        for i, (_, r) in enumerate(group.iterrows()):
+            meta_bits = []
+            if r.get("tournament"):
+                meta_bits.append(str(r["tournament"]))
+            if r.get("surface"):
+                meta_bits.append(str(r["surface"]))
+            if r.get("round"):
+                meta_bits.append(str(r["round"]))
+            meta = " · ".join(meta_bits)
 
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>🗓️ Recent matches</div>", unsafe_allow_html=True)
-    if total == 0:
-        st.caption("No matches found.")
-    else:
-        cols = [c for c in ["date", "round", "surface", "playerA", "playerB"] if c in df.columns]
-        st.dataframe(df.sort_values("date", ascending=False)[cols].head(100), use_container_width=True, hide_index=True, height=420)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Top players in this tournament
-    st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='ps-title'>⭐ Top players (this tournament)</div>", unsafe_allow_html=True)
-    if total == 0 or not {"playerA", "playerB"}.issubset(set(df.columns)):
-        st.caption("Not enough data.")
-    else:
-        # Approx wins: in matches_with_* data playerA is winner
-        winners = df["playerA"].astype(str)
-        counts = winners.value_counts().head(25).reset_index()
-        counts.columns = ["player", "wins"]
-        st.dataframe(counts, use_container_width=True, hide_index=True, height=360)
-
-        pick = st.selectbox("Open a player profile from this list", options=["—"] + counts["player"].tolist(), index=0, key="tourn_top_players_pick")
-        if pick != "—" and st.button("Open Player Profile", key="open_player_from_tournament"):
-            st.session_state["profile_player"] = str(pick)
-            st.info("Go to the **Players** tab (preselected).")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-def render_tale_of_the_tape(row_df: pd.DataFrame, playerA: str, playerB: str, surface: str):
-    """Shows a side-by-side comparison of key stats."""
-    
-    def get_val(col):
-        if col in row_df.columns and pd.notna(row_df[col].iloc[0]):
-            return row_df[col].iloc[0]
-        return 0
-
-    eloA = get_val("eloA")
-    eloB = get_val("eloB")
-    surfA = get_val("elo_surfaceA")
-    surfB = get_val("elo_surfaceB")
-    formA = get_val("form_winrateA_5") * 100
-    formB = get_val("form_winrateB_5") * 100
-    h2hA = get_val("h2h_winrateA") * 100
-    h2hB = get_val("h2h_winrateB") * 100
-    
-    st.markdown(f"<div class='ps-title'>🥊 Tale of the Tape</div>", unsafe_allow_html=True)
-    
-    # Helper to render a single row
-    def render_row(label, valA, valB, fmt="{:.0f}", is_percent=False):
-        c1, c2, c3 = st.columns([1, 2, 1])
-        
-        # Color logic: Highlight winner
-        colorA = "#ff4b4b" if valA > valB else "rgba(255,255,255,0.6)"
-        colorB = "#4b9cff" if valB > valA else "rgba(255,255,255,0.6)"
-        weightA = "700" if valA > valB else "400"
-        weightB = "700" if valB > valA else "400"
-
-        with c1:
-            st.markdown(
-                f"<div style='text-align: right; color: {colorA}; font-weight: {weightA}; font-size: 1.1rem;'>"
-                f"{fmt.format(valA)}"
-                f"</div>", 
-                unsafe_allow_html=True
-            )
-        with c2:
-            st.markdown(
-                f"<div style='text-align: center; color: rgba(255,255,255,0.5); font-size: 0.8rem; text-transform: uppercase;'>{label}</div>", 
-                unsafe_allow_html=True
-            )
-            # Mini bar chart
-            total = valA + valB if (valA + valB) > 0 else 1
-            pctA = (valA / total) * 100
-            
             st.markdown(
                 f"""
-                <div style="display: flex; height: 6px; width: 100%; border-radius: 3px; overflow: hidden; background: rgba(255,255,255,0.1);">
-                    <div style="width: {pctA}%; background: #ff4b4b;"></div>
-                    <div style="width: {100-pctA}%; background: #4b9cff;"></div>
+                <div class="match-card">
+                  <div>
+                    <div class="meta">{h(meta)}</div>
+                    <div class="name">{h(str(r['playerA']))} <span style="opacity:.5;font-weight:500;">vs</span> {h(str(r['playerB']))}</div>
+                  </div>
+                  <div class="center">
+                    <div class="vs">AI PICK</div>
+                    <div class="name" style="margin-top:4px;">{h(str(r['winner_pick']))}</div>
+                    <div class="meta">{confidence_label(float(r['winner_prob']))} confidence</div>
+                  </div>
+                  <div class="right">
+                    <div class="win-pill">{r['winner_prob']*100:.1f}%</div>
+                  </div>
                 </div>
                 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
+            )
+            uid = f"u_{day}_{i}"
+            _render_action_buttons(
+                prefix=uid,
+                player_a=str(r["playerA"]),
+                player_b=str(r["playerB"]),
+                tournament=str(r.get("tournament") or "") or None,
             )
 
-        with c3:
-            st.markdown(
-                f"<div style='text-align: left; color: {colorB}; font-weight: {weightB}; font-size: 1.1rem;'>"
-                f"{fmt.format(valB)}"
-                f"</div>", 
-                unsafe_allow_html=True
+
+# =============================================================================
+# Tab: Players
+# =============================================================================
+
+def _player_history(history_df: pd.DataFrame, player: str) -> pd.DataFrame:
+    if history_df.empty:
+        return pd.DataFrame()
+    mask = (history_df["playerA"] == player) | (history_df["playerB"] == player)
+    h_ = history_df[mask].copy().sort_values("date")
+    if h_.empty:
+        return h_
+    h_["is_winner"] = (h_["playerA"] == player).astype(int)
+    h_["opponent"] = np.where(h_["is_winner"] == 1, h_["playerB"], h_["playerA"])
+    if "eloA" in h_.columns and "eloB" in h_.columns:
+        h_["elo_player"] = np.where(h_["is_winner"] == 1, h_["eloA"], h_["eloB"])
+    return h_
+
+
+def tab_players(history_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Player Profiles</div>", unsafe_allow_html=True)
+    if history_df.empty:
+        st.markdown('<div class="empty-state">No history dataset available.</div>', unsafe_allow_html=True)
+        return
+
+    directory = player_directory(history_df)
+    if directory.empty:
+        st.markdown('<div class="empty-state">Player directory is empty.</div>', unsafe_allow_html=True)
+        return
+
+    year_min = int(directory["first_year"].dropna().min())
+    year_max = int(directory["last_year"].dropna().max())
+
+    f1, f2, f3 = st.columns([2.2, 1.5, 2.5])
+    with f1:
+        search = st.text_input("Search by name", value="", placeholder="e.g. Federer", key="p_search").strip().lower()
+    with f2:
+        min_matches = st.number_input("Min career matches", min_value=10, max_value=2000, value=80, step=10, key="p_min")
+    with f3:
+        if year_min < year_max:
+            year_range = st.slider(
+                "Active during",
+                min_value=year_min,
+                max_value=year_max,
+                value=(max(year_min, year_max - 10), year_max),
+                key="p_years",
             )
-    
-    render_row("Overall Rating (Elo)", eloA, eloB)
-    render_row(f"{surface} Rating", surfA, surfB)
-    render_row("Last 5 Form (%)", formA, formB, fmt="{:.1f}%")
-    render_row("H2H Win (%)", h2hA, h2hB, fmt="{:.1f}%")
+        else:
+            year_range = (year_min, year_max)
 
+    flt = directory[directory["matches"] >= int(min_matches)]
+    flt = flt[~((flt["last_year"] < year_range[0]) | (flt["first_year"] > year_range[1]))]
+    if search:
+        flt = flt[flt["player"].astype(str).str.lower().str.contains(search, na=False)]
+    flt = flt.sort_values(["matches", "wins"], ascending=[False, False])
 
-def plot_elo_history(playerA: str, playerB: str, history_df: pd.DataFrame, date_limit="2020-01-01"):
-    """Plots Elo history for both players."""
-    st.markdown("<div class='ps-title'>📈 Elo History (Since 2020)</div>", unsafe_allow_html=True)
-    
-    # Filter for efficiency
-    mask = (
-        (history_df["date"] >= date_limit) & 
-        (
-            (history_df["playerA"].isin([playerA, playerB])) | 
-            (history_df["playerB"].isin([playerA, playerB]))
-        )
-    )
-    df = history_df[mask].copy()
-    
-    if df.empty:
-        st.caption("No history data found for these players since 2020.")
+    if flt.empty:
+        st.markdown('<div class="empty-state">No players match the current filters.</div>', unsafe_allow_html=True)
         return
 
-    # Extract Elo at each match date for each player
-    # A player can be playerA or playerB
-    
-    data_list = []
-    
-    # Only sort once
-    df = df.sort_values("date")
-
-    for p in [playerA, playerB]:
-        # Matches where p is A
-        asA = df[df["playerA"] == p][["date", "eloA"]].rename(columns={"eloA": "elo"})
-        # Matches where p is B
-        asB = df[df["playerB"] == p][["date", "eloB"]].rename(columns={"eloB": "elo"})
-        
-        combined = pd.concat([asA, asB]).sort_values("date")
-        combined["Player"] = p
-        data_list.append(combined)
-
-    if not data_list:
-        return
-        
-    final_df = pd.concat(data_list)
-    
-    # Check for missing players and warn
-    present_players = final_df["Player"].unique()
-    missing = set([playerA, playerB]) - set(present_players)
-    if missing:
-        for m in missing:
-            st.warning(f"⚠️ No match history found for {m} since 2020. Chart line will be missing.")
-        
-        # Fallback: Career Summary Table if chart is empty/partial
-        if len(missing) == 2 or final_df.empty:
-             # Calculate simple stats from history_df manually here
-             stats = []
-             for p in [playerA, playerB]:
-                 p_matches = history_df[(history_df["playerA"] == p) | (history_df["playerB"] == p)]
-                 wins = p_matches[p_matches["winner"] == p].shape[0]
-                 total = p_matches.shape[0]
-                 wr = (wins / total * 100) if total > 0 else 0.0
-                 stats.append({"Player": p, "Matches": total, "Wins": wins, "Win Rate": f"{wr:.1f}%"})
-             
-             st.dataframe(pd.DataFrame(stats), hide_index=True, use_container_width=True)
-             return
-
-    # pivot for st.line_chart types: index=date, columns=Player, values=elo
-    # Instead of pivot, let's keep it long format for Altair
-    # final_df has columns: date, elo, elo_surface, Player
-    
-    # Altair Chart
-    base = alt.Chart(final_df).encode(
-        x=alt.X('date:T', title='Date'),
-        y=alt.Y('elo:Q', title='Elo Rating', scale=alt.Scale(zero=False)),
-        color=alt.Color('Player:N', scale=alt.Scale(domain=[playerA, playerB], range=['#ff4b4b', '#4b9cff'])),
-        tooltip=['date:T', 'Player', 'elo']
-    )
-
-    chart = base.mark_line(opacity=0.8, strokeWidth=3) + base.mark_circle(size=60, opacity=1.0)
-    
-    st.altair_chart(chart, use_container_width=True)
-
-    # Add Career Summary Below Chart (Customer Request)
-    st.markdown("#### Call-Time Career Summary")
-    stats = []
-    for p in [playerA, playerB]:
-        p_matches = history_df[(history_df["playerA"] == p) | (history_df["playerB"] == p)]
-        wins_as_A = p_matches[(p_matches["playerA"] == p) & (p_matches["winner"] == "A")].shape[0]
-        wins_as_B = p_matches[(p_matches["playerB"] == p) & (p_matches["winner"] == "B")].shape[0]
-        wins = wins_as_A + wins_as_B
-        t_matches = p_matches.shape[0]
-        wr = (wins / t_matches * 100) if t_matches > 0 else 0.0
-        stats.append({"Player": p, "Matches": t_matches, "Wins": wins, "Win Rate": f"{wr:.1f}%"})
-    
-    st.dataframe(pd.DataFrame(stats), hide_index=True, use_container_width=True)
-
-
-# =========================
-# UI Boot
-# =========================
-inject_css()
-
-# Load base predictions once
-pred_df, pred_path = load_predictions()
-
-# Sidebar Settings
-st.sidebar.subheader("⚙️")
-lang = st.sidebar.selectbox("Language / Dil", ["EN", "TR"], index=1, key="lang")
-t = T(lang)
-dev_mode = st.sidebar.checkbox(t["dev_mode"], value=False, key="dev_mode")
-
-# Reset button (clears filters + rerun)
-if st.sidebar.button(t["reset"], use_container_width=True):
-    st.cache_data.clear() # FORCE CLEAR CACHE
-    for k in [
-        "g_dates", "g_surfaces",
-        "m_player", "m_tourn", "m_only_market", "m_only_model", "m_min_edge",
-        "lb_min_matches", "lb_metric", "lb_topn",
-    ]:
-        if k in st.session_state:
-            del st.session_state[k]
-    st.rerun()
-
-# Global filters (affect KPIs + all tabs)
-st.sidebar.subheader(t["filters_global"])
-if "date" in pred_df.columns and pred_df["date"].notna().any():
-    min_d = pred_df["date"].min().date()
-    max_d = pred_df["date"].max().date()
-    dr = st.sidebar.date_input(t["date_range"], value=(min_d, max_d), key="g_dates")
-    g_d1, g_d2, single = parse_date_range(dr, t)
-    if single:
-        st.sidebar.caption(t["date_single_hint"])
-else:
-    g_d1 = g_d2 = None
-
-all_surfaces = safe_unique(pred_df, "surface")
-g_surfaces = st.sidebar.multiselect(t["surface"], all_surfaces, default=all_surfaces, key="g_surfaces")
-
-# Apply global filters for KPIs
-filtered_for_kpi = apply_global_filters(pred_df, g_d1, g_d2, g_surfaces)
-
-# Header + KPIs (NOW FILTERED)
-render_site_header(t)
-render_kpis(filtered_for_kpi, t)
-
-if dev_mode:
-    st.caption(f"[DEV] predictions source: {pred_path} | rows(all)={len(pred_df):,} rows(filtered)={len(filtered_for_kpi):,}")
-    st.caption(f"[DEV] columns: {', '.join(list(pred_df.columns)[:30])}{' ...' if len(pred_df.columns)>30 else ''}")
-
-st.divider()
-
-tab_matches, tab_upcoming, tab_players, tab_tournaments, tab_whatif, tab_leaderboard = st.tabs(
-    [t["tabs_matches"], "Upcoming", "Players", "Tournaments", t["tabs_whatif"], t["tabs_leaderboard"]]
-)
-
-
-# =========================
-# Matches tab
-# =========================
-with tab_matches:
-    st.markdown("<div class='ps-card'><div class='ps-title'>Matches Explorer</div></div>", unsafe_allow_html=True)
-
-    st.sidebar.subheader(t["filters_matches"])
-
-    # Player selectbox = type-to-search (solves "Fed" issue)
-    players_all = sorted(pd.unique(pd.concat([pred_df.get("playerA", pd.Series(dtype=str)),
-                                              pred_df.get("playerB", pd.Series(dtype=str))], ignore_index=True)).astype(str))
-    players_all = [p for p in (clean_text(x) for x in players_all) if p]
-    player_opts = [t["player_any"]] + players_all
-
-    player_pick = st.sidebar.selectbox(t["player_pick"], player_opts, index=0, key="m_player")
-    player_pick_internal = "__ALL__" if player_pick == t["player_any"] else player_pick
-
-    tourn_opts = safe_unique(pred_df, "tournament")
-    tournaments = st.sidebar.multiselect(t["tournament_search"], tourn_opts, key="m_tourn")
-
-    only_market = st.sidebar.checkbox(t["only_market"], value=False, key="m_only_market")
-    only_model = st.sidebar.checkbox(t["only_model"], value=True, key="m_only_model")
-
-    min_edge = None
-    if "edge" in pred_df.columns:
-        min_edge = st.sidebar.slider(t["min_edge"], -1.0, 1.0, 0.0, 0.01, key="m_min_edge")
-
-    # Apply global + match filters
-    base = apply_global_filters(pred_df, g_d1, g_d2, g_surfaces)
-    fdf = apply_match_filters(base, player_pick_internal, tournaments, only_market, only_model, min_edge)
-
-    st.write(f"{t['found']}: **{len(fdf):,}**")
-
-    show_cols = [c for c in [
-        "date", "tournament", "round", "surface",
-        "playerA", "playerB", "winner",
-        "p_model", "pA_market", "edge"
-    ] if c in fdf.columns]
-
-    display_cols = []
-    
-    # Translation map for Sort By dropdown
-    sort_map = {
-        "date": t["match_date"],
-        "tournament": "Turnuva",
-        "round": "Round",
-        "surface": t["surface"],
-        "playerA": t["player_a"],
-        "playerB": t["player_b"],
-        "winner": "Kazanan",
-        "p_model": "AI Güven (Prob)",
-        "pA_market": "Market Oranı",
-        "edge": "Değer (Edge/Fırsat)"
+    options = flt.head(400).copy()
+    label_for = {
+        row["player"]: f"{row['player']}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR  ·  {int(row['first_year'])}-{int(row['last_year'])}"
+        for _, row in options.iterrows()
     }
-    
-    # Reverse map to find original col from display name
-    rev_sort_map = {v: k for k, v in sort_map.items()}
+    keys = list(options["player"])
+    pre = st.session_state.get("profile_player")
+    default_idx = keys.index(pre) if pre in keys else 0
 
-    c1, c2, c3 = st.columns([2, 1, 1])
-    with c1:
-        # Show translated options
-        # We filter show_cols to what exists, then map them
-        available_sort_options = [sort_map.get(c, c) for c in show_cols]
-        selected_disp = st.selectbox(t["sort_by"], options=available_sort_options)
-        # Convert back to internal name
-        sort_by = rev_sort_map.get(selected_disp, selected_disp)
+    player = st.selectbox(
+        f"Select a player ({len(flt):,} match the filters, top 400 shown)",
+        keys,
+        index=default_idx,
+        format_func=lambda k: label_for.get(k, k),
+        key="p_select",
+    )
+    if not player:
+        return
+    st.session_state["profile_player"] = player
 
-    with c2:
-        ascending = st.checkbox(t["ascending"], value=False)
-    with c3:
-        limit = st.selectbox(t["rows"], [100, 250, 500, 1000], index=1)
+    h_ = _player_history(history_df, player)
+    if h_.empty:
+        st.markdown('<div class="empty-state">No matches found for this player.</div>', unsafe_allow_html=True)
+        return
 
-    if sort_by in fdf.columns:
-        fdf = fdf.sort_values(sort_by, ascending=ascending)
+    total = len(h_)
+    wins = int(h_["is_winner"].sum())
+    losses = total - wins
+    winrate = wins / total if total else 0.0
+    last_year_window = h_[h_["date"] >= (h_["date"].max() - pd.Timedelta(days=365))]
+    recent_wr = last_year_window["is_winner"].mean() if len(last_year_window) else None
+    first_season = str(h_["date"].min().year)
+    last_season = str(h_["date"].max().year)
 
-    view = fdf[show_cols].head(limit).copy() if show_cols else fdf.head(limit).copy()
+    img_html = player_image_html(player, size=120)
+    st.markdown(
+        f"""
+        <div class="profile-header">
+          <div class="avatar">{img_html}</div>
+          <div class="meta-block">
+            <div class="name">{h(player)}</div>
+            <div class="sub">Career: {h(first_season)}-{h(last_season)} &middot; {total:,} matches &middot; {wins:,}-{losses:,} W-L &middot; {winrate*100:.1f}% WR</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # RENAME COLS FOR UI
-    # RENAME COLS FOR UI
-    # Scale to percentage for display (0.9 -> 90.0)
-    # AND FLIP if p_model < 0.5 (Customer Request: Show Winner Probability, not Player A)
-    if "p_model" in view.columns:
-        # We need to act on rows where p_model < 0.5
-        # 1) If p_model < 0.5 => It means Model predicts Player B.
-        #    We want to show p(B) = 1 - p(A).
-        #    We also must flip Market Odds to be for Player B => 1 - pMarket(A).
-        #    Edge sign also flips.
-        
-        mask = view["p_model"] < 0.5
-        view.loc[mask, "p_model"] = 1.0 - view.loc[mask, "p_model"]
-        
-        if "pA_market" in view.columns:
-            view.loc[mask, "pA_market"] = 1.0 - view.loc[mask, "pA_market"]
-            
-        if "edge" in view.columns:
-            view.loc[mask, "edge"] = -1.0 * view.loc[mask, "edge"]
+    # Image fetch action
+    has_local_img = find_image(ASSETS_DIR / "players" / slugify(player)) is not None
+    api_present = _api_key() is not None
+    img_cols = st.columns([1.4, 1.4, 4])
+    with img_cols[0]:
+        if api_present:
+            if st.button("Fetch live photo", key="p_fetch_img", width="stretch"):
+                with st.spinner("Searching API-Tennis fixtures for this player..."):
+                    saved = fetch_player_image_via_api(player)
+                if saved is not None:
+                    st.success("Photo updated.")
+                    st.rerun()
+                else:
+                    st.warning("No matching player photo in recent fixtures.")
+        else:
+            st.button("Fetch live photo", key="p_fetch_img_disabled", disabled=True, width="stretch")
+    with img_cols[1]:
+        if has_local_img:
+            if st.button("Reset to avatar", key="p_reset_img", width="stretch"):
+                try:
+                    img_path = find_image(ASSETS_DIR / "players" / slugify(player))
+                    if img_path and img_path.exists():
+                        img_path.unlink()
+                    st.rerun()
+                except Exception:
+                    pass
 
-        # Now scale all to 100
-        view["p_model"] = view["p_model"] * 100
-        if "pA_market" in view.columns: view["pA_market"] = view["pA_market"] * 100
-        if "edge" in view.columns: view["edge"] = view["edge"] * 100
+    tiles = (
+        _kpi("Matches", f"{total:,}")
+        + _kpi("Wins / Losses", f"{wins:,} - {losses:,}")
+        + _kpi("Career WR", _fmt_pct(winrate))
+        + _kpi("Last 365d WR", _fmt_pct(recent_wr))
+    )
+    st.markdown(f'<div class="ps-kpi-grid">{tiles}</div>', unsafe_allow_html=True)
 
-    view = view.rename(columns={
-        "date": "Date",
-        "tournament": "Tournament",
-        "round": "Round",
-        "surface": "Surface",
-        "playerA": "Player A",
-        "playerB": "Player B",
-        "winner": "Winner",
-        "p_model": "AI Confidence",
-        "pA_market": "Market Odds",
-        "edge": "Value"
+    if "elo_player" in h_.columns:
+        st.markdown("<div class='ps-section-title'>Elo trajectory</div>", unsafe_allow_html=True)
+        elo_df = h_[["date", "elo_player", "surface"]].dropna(subset=["elo_player", "date"]).copy()
+        if not elo_df.empty:
+            chart = (
+                alt.Chart(elo_df)
+                .mark_line(strokeWidth=2)
+                .encode(
+                    x=alt.X("date:T", title=None),
+                    y=alt.Y("elo_player:Q", title="Elo", scale=alt.Scale(zero=False)),
+                    color=alt.Color("surface:N", legend=alt.Legend(title="Surface", orient="top")),
+                    tooltip=["date:T", "elo_player:Q", "surface:N"],
+                )
+                .properties(height=300)
+                .configure_axis(grid=True, gridColor="#1a2030", labelColor="#9aa3b6", titleColor="#9aa3b6")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart, width="stretch")
+
+    surfaces = h_.groupby("surface")["is_winner"].agg(["sum", "count"])
+    surfaces["winrate"] = surfaces["sum"] / surfaces["count"]
+    if not surfaces.empty:
+        st.markdown("<div class='ps-section-title'>Surface breakdown</div>", unsafe_allow_html=True)
+        surf_view = surfaces.reset_index().rename(columns={"sum": "Wins", "count": "Matches", "winrate": "Win rate"})
+        surf_view["Win rate"] = surf_view["Win rate"] * 100
+        st.dataframe(
+            surf_view,
+            width="stretch",
+            hide_index=True,
+            column_config={"Win rate": st.column_config.NumberColumn("Win rate", format="%.1f%%")},
+        )
+
+    st.markdown("<div class='ps-section-title'>Recent matches</div>", unsafe_allow_html=True)
+    recent = h_.sort_values("date", ascending=False).head(20).copy()
+    recent_view = pd.DataFrame({
+        "Date": recent["date"].dt.strftime("%Y-%m-%d"),
+        "Tournament": recent.get("tournament", ""),
+        "Surface": recent["surface"],
+        "Round": recent.get("round", ""),
+        "Result": np.where(recent["is_winner"] == 1, "Win", "Loss"),
+        "Opponent": recent["opponent"],
+        "Score": recent.get("score", ""),
     })
-    
-    st.dataframe(
-        view,
-        use_container_width=True,
-        hide_index=True,
-        height=400,
-        selection_mode="single-row",
-        on_select="rerun",
-        key="match_selection",
-        column_config={
-            "AI Confidence": st.column_config.NumberColumn(
-                "AI Confidence",
-                help="Probability that Player A wins",
-                format="%.1f%%"
-            ),
-            "Market Odds": st.column_config.NumberColumn(
-                "Market Odds",
-                help="Implied probability from bookmakers",
-                format="%.1f%%"
-            ),
-            "Value": st.column_config.NumberColumn(
-                "Value",
-                help="Difference between AI model and Market",
-                format="%.1f%%"
+    st.dataframe(recent_view, width="stretch", hide_index=True, height=380)
+
+    # Quick navigation: opponents & tournaments from this profile
+    st.caption("Open a profile from this player's history:")
+    nav_cols = st.columns([2, 2])
+    with nav_cols[0]:
+        opp_options = ["—"] + sorted(recent["opponent"].dropna().unique().tolist())
+        opp_pick = st.selectbox("Recent opponent", opp_options, key="p_jump_opp")
+        if opp_pick != "—":
+            st.button(f"Open profile: {opp_pick}", key="p_open_opp", on_click=navigate_to_player, args=(opp_pick,), width="stretch")
+    with nav_cols[1]:
+        if "tournament" in recent.columns:
+            t_options = ["—"] + sorted(recent["tournament"].dropna().unique().tolist())
+            t_pick = st.selectbox("Recent tournament", t_options, key="p_jump_tour")
+            if t_pick != "—":
+                st.button(f"Open: {t_pick}", key="p_open_tour", on_click=navigate_to_tournament, args=(t_pick,), width="stretch")
+
+
+# =============================================================================
+# Tab: Tournaments
+# =============================================================================
+
+def tab_tournaments(history_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Tournament Profiles</div>", unsafe_allow_html=True)
+    if history_df.empty or "tournament" not in history_df.columns:
+        st.markdown('<div class="empty-state">No tournament data available.</div>', unsafe_allow_html=True)
+        return
+
+    counts = (
+        history_df.groupby("tournament")["date"]
+        .agg(["count", "min", "max"])
+        .rename(columns={"count": "matches", "min": "first", "max": "last"})
+        .reset_index()
+    )
+    counts["first_year"] = counts["first"].dt.year
+    counts["last_year"] = counts["last"].dt.year
+    counts = counts.sort_values("matches", ascending=False)
+
+    f1, f2, f3 = st.columns([2.4, 1.6, 2])
+    with f1:
+        search = st.text_input("Search tournament", value="", placeholder="e.g. Wimbledon", key="t_search").strip().lower()
+    with f2:
+        min_matches = st.number_input("Min matches recorded", min_value=10, max_value=2000, value=40, step=10, key="t_min")
+    with f3:
+        year_min = int(counts["first_year"].min())
+        year_max = int(counts["last_year"].max())
+        if year_min < year_max:
+            year_range = st.slider(
+                "Active during",
+                min_value=year_min,
+                max_value=year_max,
+                value=(max(year_min, year_max - 10), year_max),
+                key="t_years",
             )
-        }
+        else:
+            year_range = (year_min, year_max)
+
+    flt = counts[counts["matches"] >= int(min_matches)]
+    flt = flt[~((flt["last_year"] < year_range[0]) | (flt["first_year"] > year_range[1]))]
+    if search:
+        flt = flt[flt["tournament"].astype(str).str.lower().str.contains(search, na=False)]
+    if flt.empty:
+        st.markdown('<div class="empty-state">No tournaments match the current filters.</div>', unsafe_allow_html=True)
+        return
+
+    label_for = {
+        row["tournament"]: f"{row['tournament']}  -  {int(row['matches']):,} matches  ·  {int(row['first_year'])}-{int(row['last_year'])}"
+        for _, row in flt.iterrows()
+    }
+    keys = list(flt["tournament"])
+    pre = st.session_state.get("profile_tournament")
+    default_idx = keys.index(pre) if pre in keys else 0
+    tour = st.selectbox(
+        f"Select a tournament ({len(flt):,} match the filters)",
+        keys,
+        index=default_idx,
+        format_func=lambda k: label_for.get(k, k),
+        key="t_select",
+    )
+    if not tour:
+        return
+    st.session_state["profile_tournament"] = tour
+
+    sub = history_df[history_df["tournament"] == tour].copy()
+    if sub.empty:
+        st.markdown('<div class="empty-state">No matches found for this tournament.</div>', unsafe_allow_html=True)
+        return
+
+    years = sorted(sub["date"].dt.year.dropna().unique().tolist())
+    surfaces = sorted(sub["surface"].dropna().unique().tolist())
+    champ_per_year: List[Tuple[int, str]] = []
+    for y in years:
+        round_col = sub.get("round", pd.Series("", index=sub.index)).astype(str).str.upper()
+        f_ = sub[(sub["date"].dt.year == y) & (round_col == "F")]
+        if not f_.empty:
+            champ_per_year.append((int(y), str(f_.iloc[-1]["playerA"])))
+
+    editions = f"{len(years):,}"
+    total_matches = f"{len(sub):,}"
+    surfaces_label = ", ".join(surfaces) if surfaces else "-"
+    first_season = str(min(years)) if years else "-"
+    latest_season = str(max(years)) if years else "-"
+    players_seen = sub[["playerA", "playerB"]].stack().nunique()
+    players_seen_label = f"{players_seen:,}"
+
+    tiles_html = (
+        _kpi("Editions", editions)
+        + _kpi("Total matches", total_matches)
+        + _kpi("Surfaces", surfaces_label)
+        + _kpi("First season", first_season)
+        + _kpi("Latest season", latest_season)
+        + _kpi("Players seen", players_seen_label)
+    )
+    st.markdown(
+        f'<div class="ps-kpi-grid" style="grid-template-columns:repeat(6,minmax(0,1fr));">{tiles_html}</div>',
+        unsafe_allow_html=True,
     )
 
-    selected_rows = st.session_state.match_selection.get("selection", {}).get("rows", [])
-    st.divider()
+    if champ_per_year:
+        st.markdown("<div class='ps-section-title'>Recent champions</div>", unsafe_allow_html=True)
+        champ_df = pd.DataFrame(champ_per_year[-15:], columns=["Year", "Champion"])
+        st.dataframe(champ_df.iloc[::-1], width="stretch", hide_index=True)
 
-    if not selected_rows:
-        st.info(t["select_info"])
-    else:
-        # Get the actual row index from the view
-        selected_idx_loc = selected_rows[0]
-        # RETRIEVE ORIGINAL DATA directly from fdf using the index label from view
-        # This gives us the unscaled values (0.75 instead of 75.0) which render_match_card expects.
-        original_idx = view.index[selected_idx_loc]
-        simulated_row = fdf.loc[original_idx]
+        # quick jump for champions
+        st.caption("Open a champion's profile:")
+        c_pick = st.selectbox("Champion", ["—"] + champ_df["Champion"].tolist(), key="t_jump_champ")
+        if c_pick != "—":
+            st.button(f"Open profile: {c_pick}", key="t_open_champ", on_click=navigate_to_player, args=(c_pick,), width="stretch")
 
-        # Quick links to profiles
-        prof_c1, prof_c2, prof_c3 = st.columns([1, 1, 2])
-        with prof_c1:
-            if st.button("Open Player A Profile", key="open_playerA_from_match"):
-                st.session_state["profile_player"] = str(simulated_row.get("playerA", ""))
-                st.info("Go to the **Players** tab (preselected).")
-        with prof_c2:
-            if st.button("Open Player B Profile", key="open_playerB_from_match"):
-                st.session_state["profile_player"] = str(simulated_row.get("playerB", ""))
-                st.info("Go to the **Players** tab (preselected).")
-        with prof_c3:
-            if st.button("Open Tournament Profile", key="open_tournament_from_match"):
-                st.session_state["profile_tournament"] = str(simulated_row.get("tournament", ""))
-                st.info("Go to the **Tournaments** tab (preselected).")
+    st.markdown("<div class='ps-section-title'>Most recent matches</div>", unsafe_allow_html=True)
+    recent = sub.sort_values("date", ascending=False).head(25).copy()
+    recent_view = pd.DataFrame({
+        "Date": recent["date"].dt.strftime("%Y-%m-%d"),
+        "Round": recent.get("round", ""),
+        "Surface": recent["surface"],
+        "Winner": recent["playerA"],
+        "Loser": recent["playerB"],
+        "Score": recent.get("score", ""),
+    })
+    st.dataframe(recent_view, width="stretch", hide_index=True, height=380)
 
-        render_match_card(simulated_row, t)
-
-    if dev_mode:
-        st.caption(f"[DEV] match filters => player={player_pick} tourn={tournaments} only_market={only_market} only_model={only_model} min_edge={min_edge}")
+    st.caption("Open a player from this tournament:")
+    plr_options = ["—"] + sorted(pd.concat([recent["playerA"], recent["playerB"]]).dropna().astype(str).unique().tolist())
+    plr_pick = st.selectbox("Player", plr_options, key="t_jump_player")
+    if plr_pick != "—":
+        st.button(f"Open profile: {plr_pick}", key="t_open_player", on_click=navigate_to_player, args=(plr_pick,), width="stretch")
 
 
-# =========================
-# Upcoming tab
-# =========================
-with tab_upcoming:
-    st.markdown("<div class='ps-card'><div class='ps-title'>Upcoming Matches</div></div>", unsafe_allow_html=True)
+# =============================================================================
+# Tab: What-if
+# =============================================================================
 
-    # Refresh controls (server-side only) + cooldown to protect rate limits.
-    # Do NOT require secrets.toml. Read from env; fall back to 120s.
-    try:
-        from src.utils.env import getenv_int  # local import to avoid circulars
-
-        cooldown_s = int(getenv_int("REFRESH_COOLDOWN_S", 120))
-    except Exception:
-        cooldown_s = 120
-    cooldown_s = max(30, min(cooldown_s, 3600))
-    last_ts = float(st.session_state.get("last_refresh_ts", 0.0) or 0.0)
-    now_ts = time.time()
-    remaining = max(0, int(last_ts + cooldown_s - now_ts))
-
-    with st.expander("Refresh data (server-side)", expanded=False):
-        st.caption(
-            "Runs Sportradar fetchers on the server, then reloads the fixtures file. "
-            "Use sparingly to avoid rate limits."
-        )
-        can_click = remaining == 0
-        btn_label = "Refresh now" if can_click else f"Refresh now (cooldown {remaining}s)"
-        if st.button(btn_label, disabled=not can_click, use_container_width=True, key="refresh_now"):
-            st.session_state["last_refresh_ts"] = time.time()
-            with st.spinner("Refreshing upcoming fixtures + odds..."):
-                ok, logs = _run_refresh_pipeline()
-            # Reload cached datasets
-            st.cache_data.clear()
-            if ok:
-                st.success("Refresh completed.")
-            else:
-                st.warning("Refresh finished with warnings/errors. The UI will still load the latest available files.")
-            if logs:
-                st.code(logs, language="text")
-
-    # Load artifacts + history once here (cache handles speed)
-    history_df, _history_path = load_history()
+def tab_whatif(history_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Match Predictor</div>", unsafe_allow_html=True)
     model, imputer, feature_cols = load_artifacts()
+    if model is None or build_feature_row is None or history_df.empty:
+        st.markdown('<div class="empty-state">Model artifacts or history dataset are missing.</div>', unsafe_allow_html=True)
+        return
+
+    directory = player_directory(history_df)
+    if directory.empty:
+        st.markdown('<div class="empty-state">No players available.</div>', unsafe_allow_html=True)
+        return
+
+    surfaces = sorted(history_df["surface"].dropna().unique().tolist())
+    rounds = ["", "F", "SF", "QF", "R16", "R32", "R64", "R128", "RR"]
+
+    keys = list(directory["player"])
+    label_for = {
+        row["player"]: f"{row['player']}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR"
+        for _, row in directory.iterrows()
+    }
+
+    f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
+    with f1:
+        pa = st.selectbox("Player A", keys, index=0, format_func=lambda k: label_for.get(k, k), key="w_pa")
+    with f2:
+        pb = st.selectbox("Player B", keys, index=min(1, len(keys) - 1), format_func=lambda k: label_for.get(k, k), key="w_pb")
+    with f3:
+        surface = st.selectbox(
+            "Surface",
+            surfaces,
+            index=surfaces.index("Hard") if "Hard" in surfaces else 0,
+            key="w_surface",
+        )
+    with f4:
+        round_code = st.selectbox("Round", rounds, index=0, key="w_round")
+
+    match_date = st.date_input(
+        "Match date",
+        value=history_df["date"].max().date() if not history_df.empty else pd.Timestamp.today().date(),
+        key="w_date",
+    )
+    if pa == pb:
+        st.warning("Pick two different players.")
+        return
 
     try:
-        fixtures_df, fixtures_path = load_fixtures()
-    except Exception as e:
-        st.info("No fixtures file found yet. Create `data/processed/fixtures_upcoming.csv` (or use the example in `data/examples/`).")
-        st.caption(f"Details: {e}")
-        st.stop()
-
-    # Basic validation
-    required = ["date", "surface", "playerA", "playerB"]
-    missing = [c for c in required if c not in fixtures_df.columns]
-    if missing:
-        st.error(f"Fixtures file missing columns: {', '.join(missing)}")
-        st.caption(f"Source: {fixtures_path}")
-        st.stop()
-
-    # Default date filter: from today to +14 days when possible
-    today = pd.Timestamp.today().normalize()
-    dmin = fixtures_df["date"].min()
-    dmax = fixtures_df["date"].max()
-    if pd.notna(dmin) and pd.notna(dmax):
-        default_start = max(today, dmin.normalize())
-        default_end = min(dmax.normalize(), today + pd.Timedelta(days=14))
-        if default_end < default_start:
-            default_end = default_start
-        dr2 = st.date_input("Date range", value=(default_start.date(), default_end.date()), key="u_dates")
-        u_d1, u_d2, _ = parse_date_range(dr2, t)
-        if u_d1 and u_d2:
-            fixtures_df = fixtures_df[
-                (fixtures_df["date"].dt.date >= u_d1) & (fixtures_df["date"].dt.date <= u_d2)
-            ].copy()
-
-    # Extra filters
-    colf1, colf2, colf3 = st.columns([2, 1, 1])
-    with colf1:
-        tourn_opts2 = safe_unique(fixtures_df, "tournament")
-        tourn_pick = st.multiselect("Tournament", tourn_opts2, default=[], key="u_tourn")
-    with colf2:
-        surf_opts2 = safe_unique(fixtures_df, "surface")
-        surf_pick = st.multiselect("Surface", surf_opts2, default=surf_opts2, key="u_surf")
-    with colf3:
-        min_conf = st.slider("Min confidence", 0.50, 0.90, 0.55, 0.01, key="u_minconf")
-
-    if tourn_pick and "tournament" in fixtures_df.columns:
-        fixtures_df = fixtures_df[fixtures_df["tournament"].isin(tourn_pick)].copy()
-    if surf_pick and "surface" in fixtures_df.columns:
-        fixtures_df = fixtures_df[fixtures_df["surface"].isin(surf_pick)].copy()
-
-    if fixtures_df.empty:
-        st.warning("No fixtures after filters.")
-        st.caption(f"Source: {fixtures_path}")
-        st.stop()
-
-    # Score fixtures
-    # Apply aliases (canonical names) for scoring consistency
-    aliases = load_aliases()
-    for col in ["playerA", "playerB"]:
-        if col in fixtures_df.columns:
-            fixtures_df[col] = fixtures_df[col].astype(str).map(aliases.map_player)
-    if "tournament" in fixtures_df.columns:
-        fixtures_df["tournament"] = fixtures_df["tournament"].astype(str).map(aliases.map_tournament)
-
-    scored = score_fixtures(fixtures_df, history_df, feature_cols)
-    if scored.empty:
-        st.warning("No fixtures could be scored (missing date/surface/player names).")
-        st.caption(f"Source: {fixtures_path}")
-        st.stop()
-
-    # Confidence and winner label
-    scored = scored.copy()
-    scored["winner_pick"] = np.where(scored["p_model"] >= 0.5, scored["playerA"], scored["playerB"])
-    scored["winner_prob"] = np.where(scored["p_model"] >= 0.5, scored["p_model"], 1.0 - scored["p_model"])
-    scored = scored[scored["winner_prob"] >= float(min_conf)]
-    scored = scored.sort_values(["date", "winner_prob"], ascending=[True, False])
-
-    st.write(f"Matches found: **{len(scored):,}**")
-
-    # Data quality report
-    if "snapA_ok" in scored.columns and "snapB_ok" in scored.columns:
-        missA = int((scored["snapA_ok"] == 0).sum())
-        missB = int((scored["snapB_ok"] == 0).sum())
-        if missA or missB:
-            st.warning(
-                f"Some fixtures have limited history snapshots: "
-                f"missing A-snapshot={missA}, missing B-snapshot={missB}. "
-                f"Add mappings in `data/registry/player_aliases.csv` if names differ."
-            )
-
-    def _initials(name: str) -> str:
-        parts = [p for p in str(name).split() if p]
-        if not parts:
-            return "?"
-        if len(parts) == 1:
-            return parts[0][:2].upper()
-        return (parts[0][0] + parts[-1][0]).upper()
-
-    def _player_chip(name: str) -> str:
-        img = find_image(ASSETS.players / slugify(name))
-        if img:
-            # local file rendering via Streamlit is easiest in st.image; for HTML, we show initials badge
-            return f"<span style='display:inline-flex;align-items:center;gap:8px;'><span style='width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,0.12);display:inline-flex;align-items:center;justify-content:center;font-size:11px;'>{_initials(name)}</span><span>{name}</span></span>"
-        return f"<span style='display:inline-flex;align-items:center;gap:8px;'><span style='width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,0.12);display:inline-flex;align-items:center;justify-content:center;font-size:11px;'>{_initials(name)}</span><span>{name}</span></span>"
-
-    # Compact, less cluttered list as cards (shows avatars via initials; selected row shows real images below)
-    st.markdown("<div class='ps-card'><div class='ps-title'>📅 Upcoming list</div></div>", unsafe_allow_html=True)
-    preview = scored.head(40).copy()
-    for i, r in preview.iterrows():
-        date_s = pd.to_datetime(r["date"]).strftime("%Y-%m-%d")
-        tour = clean_text(r.get("tournament", ""))
-        surface = clean_text(r.get("surface", ""))
-        rnd = clean_text(r.get("round", ""))
-        pa = clean_text(r.get("playerA", ""))
-        pb = clean_text(r.get("playerB", ""))
-        pick = clean_text(r.get("winner_pick", ""))
-        conf = float(r.get("winner_prob", np.nan)) * 100.0
-        st.markdown(
-            f"""
-            <div class="ps-card" style="padding:14px;">
-              <div style="display:flex;justify-content:space-between;opacity:0.7;font-size:0.9rem;">
-                <div>📅 {date_s}</div>
-                <div>🏆 {tour} · 🎾 {surface} {rnd}</div>
-              </div>
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-                <div style="font-size:1.1rem;font-weight:700;">{_player_chip(pa)} <span style="opacity:0.5;font-weight:600;">vs</span> {_player_chip(pb)}</div>
-                <div style="text-align:right;">
-                  <div style="font-weight:800;">🤖 {pick}</div>
-                  <div style="opacity:0.75;">{conf:.1f}%</div>
-                </div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # Also keep a table for power users (selection works)
-    base_cols = ["date", "tournament", "round", "surface", "playerA", "playerB", "winner_pick", "winner_prob", "pA_market", "edge"]
-    for ox in ["oddsA", "oddsB"]:
-        if ox in scored.columns and ox not in base_cols:
-            base_cols.append(ox)
-
-    show = scored[[c for c in base_cols if c in scored.columns]].copy()
-    show["winner_prob"] = (show["winner_prob"] * 100).round(1)
-    if "pA_market" in show.columns:
-        show["pA_market"] = (show["pA_market"] * 100).round(1)
-    if "edge" in show.columns:
-        show["edge"] = (show["edge"] * 100).round(1)
-
-    st.markdown("<div class='ps-card'><div class='ps-title'>🔎 Table view</div></div>", unsafe_allow_html=True)
-    st.dataframe(
-        show.rename(
-            columns={
-                "date": "Date",
-                "tournament": "Tournament",
-                "round": "Round",
-                "surface": "Surface",
-                "playerA": "Player A",
-                "playerB": "Player B",
-                "winner_pick": "AI Pick",
-                "winner_prob": "AI Confidence",
-                "pA_market": "Market (A)",
-                "edge": "Edge (A)",
-                "oddsA": "Odds A (dec.)",
-                "oddsB": "Odds B (dec.)",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-        height=360,
-        selection_mode="single-row",
-        on_select="rerun",
-        key="upcoming_selection",
-    )
-
-    selected_rows_u = st.session_state.upcoming_selection.get("selection", {}).get("rows", [])
-    st.divider()
-
-    if selected_rows_u:
-        idx_loc = selected_rows_u[0]
-        original_idx = show.index[idx_loc]
-        row = scored.loc[original_idx]
-
-        # Quick links to profiles
-        uprof_c1, uprof_c2, uprof_c3 = st.columns([1, 1, 2])
-        with uprof_c1:
-            if st.button("Open Player A Profile", key="open_playerA_from_upcoming"):
-                st.session_state["profile_player"] = str(row.get("playerA", ""))
-                st.info("Go to the **Players** tab (preselected).")
-        with uprof_c2:
-            if st.button("Open Player B Profile", key="open_playerB_from_upcoming"):
-                st.session_state["profile_player"] = str(row.get("playerB", ""))
-                st.info("Go to the **Players** tab (preselected).")
-        with uprof_c3:
-            if st.button("Open Tournament Profile", key="open_tournament_from_upcoming"):
-                st.session_state["profile_tournament"] = str(row.get("tournament", ""))
-                st.info("Go to the **Tournaments** tab (preselected).")
-
-        # Images (optional)
-        pa_slug = slugify(row["playerA"])
-        pb_slug = slugify(row["playerB"])
-        ta_slug = slugify(row.get("tournament", ""))
-
-        imgA = find_image(ASSETS.players / pa_slug)
-        imgB = find_image(ASSETS.players / pb_slug)
-        imgT = find_image(ASSETS.tournaments / ta_slug)
-
-        pa_name = str(row.get("playerA", "") or "")
-        pb_name = str(row.get("playerB", "") or "")
-
-        cimg1, cimg2, cimg3 = st.columns([1, 1, 2])
-        with cimg1:
-            if imgA:
-                st.image(str(imgA), caption=row["playerA"], use_container_width=True)
-            else:
-                st.markdown(
-                    f"<div class='ps-avatar-frame'><img src='{svg_avatar_data_uri(pa_name)}' alt=''></div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(pa_name)
-        with cimg2:
-            if imgB:
-                st.image(str(imgB), caption=row["playerB"], use_container_width=True)
-            else:
-                st.markdown(
-                    f"<div class='ps-avatar-frame'><img src='{svg_avatar_data_uri(pb_name)}' alt=''></div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(pb_name)
-        with cimg3:
-            tn = str(row.get("tournament", "") or "")
-            if imgT:
-                st.image(str(imgT), caption=tn, use_container_width=True)
-            elif tn.strip():
-                st.markdown(
-                    f"<div class='ps-avatar-frame'><img src='{svg_avatar_data_uri(tn)}' alt=''></div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(tn)
-            else:
-                st.caption("—")
-
-        # Simple card
-        oa = row.get("oddsA")
-        ob = row.get("oddsB")
-        odds_line = ""
-        if pd.notna(oa) and pd.notna(ob):
-            odds_line = f"<div style='margin-top:8px; opacity:0.85;'>📉 Decimal odds — A <b>{float(oa):.3f}</b> · B <b>{float(ob):.3f}</b></div>"
-
-        st.markdown(
-            f"""
-            <div class="ps-card">
-              <div style="opacity:0.7;">📅 {pd.to_datetime(row['date']).strftime('%Y-%m-%d')} | 🏆 {row.get('tournament','')} | 🎾 {row.get('surface','')} {row.get('round','')}</div>
-              <div style="font-size:1.6rem; font-weight:800; margin-top:10px;">{row['playerA']} vs {row['playerB']}</div>
-              <div style="margin-top:10px; font-size:1.1rem;">🤖 Pick: <b>{row['winner_pick']}</b> with <b>{row['winner_prob']*100:.1f}%</b></div>
-              {odds_line}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    if dev_mode:
-        st.caption(f"[DEV] fixtures source: {fixtures_path} | rows={len(fixtures_df):,}")
-
-
-# =========================
-# Players tab
-# =========================
-with tab_players:
-    st.markdown("<div class='ps-card'><div class='ps-title'>Players</div></div>", unsafe_allow_html=True)
-    history_df, _ = load_history()
-
-    # canonical mapping
-    aliases = load_aliases()
-    all_players = sorted(
-        pd.unique(
-            pd.concat(
-                [history_df.get("playerA", pd.Series(dtype=str)), history_df.get("playerB", pd.Series(dtype=str))],
-                ignore_index=True,
-            )
-        ).astype(str)
-    )
-    # Map only raw variants to canonical display if provided; otherwise keep original casing.
-    all_players = [aliases.map_player(clean_text(p)) for p in all_players if clean_text(p)]
-    all_players = sorted(set([p for p in all_players if p]))
-
-    default_player = st.session_state.get("profile_player") if "profile_player" in st.session_state else None
-    if default_player and default_player in all_players:
-        default_idx = all_players.index(default_player)
-    else:
-        default_idx = 0
-
-    if not all_players:
-        st.info("No players found in history dataset.")
-        st.stop()
-
-    player_sel = st.selectbox("Select player", options=all_players, index=default_idx, key="player_profile_select")
-    st.session_state["profile_player"] = player_sel
-    render_player_profile(player_sel, history_df, pred_df)
-
-    # Optional: show upcoming fixtures for this player
-    try:
-        fx, _ = load_fixtures()
-        if {"playerA", "playerB"}.issubset(set(fx.columns)):
-            fx = fx.copy()
-            fx["playerA"] = fx["playerA"].astype(str).map(aliases.map_player)
-            fx["playerB"] = fx["playerB"].astype(str).map(aliases.map_player)
-            m = (fx["playerA"] == player_sel) | (fx["playerB"] == player_sel)
-            fxp = fx[m].copy()
-            if not fxp.empty:
-                st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-                st.markdown("<div class='ps-title'>⏳ Upcoming fixtures</div>", unsafe_allow_html=True)
-                cols = [c for c in ["date", "tournament", "surface", "round", "playerA", "playerB", "oddsA", "oddsB"] if c in fxp.columns]
-                st.dataframe(fxp.sort_values("date")[cols].head(50), use_container_width=True, hide_index=True, height=320)
-                st.markdown("</div>", unsafe_allow_html=True)
-    except Exception:
-        pass
-
-
-# =========================
-# Tournaments tab
-# =========================
-with tab_tournaments:
-    st.markdown("<div class='ps-card'><div class='ps-title'>Tournaments</div></div>", unsafe_allow_html=True)
-    history_df, _ = load_history()
-    aliases = load_aliases()
-    if "tournament" not in history_df.columns:
-        st.info("Tournament column not available in history dataset.")
-        st.stop()
-
-    tournaments_all = sorted(
-        set([aliases.map_tournament(clean_text(x)) for x in history_df["tournament"].dropna().astype(str).tolist() if clean_text(x)])
-    )
-    if not tournaments_all:
-        st.info("No tournaments found in history dataset.")
-        st.stop()
-
-    default_t = st.session_state.get("profile_tournament") if "profile_tournament" in st.session_state else None
-    default_idx_t = tournaments_all.index(default_t) if (default_t in tournaments_all) else 0
-    tourn_sel = st.selectbox("Select tournament", options=tournaments_all, index=default_idx_t, key="tourn_profile_select")
-    st.session_state["profile_tournament"] = tourn_sel
-    render_tournament_profile(tourn_sel, history_df, pred_df)
-
-# =========================
-# What-if tab
-# =========================
-with tab_whatif:
-    st.markdown(f"<div class='ps-card'><div class='ps-title'>{t['whatif_title']}</div></div>", unsafe_allow_html=True)
-
-    history_df, history_path = load_history()
-    model, imputer, feature_cols = load_artifacts()
-
-    players = sorted(pd.unique(pd.concat([history_df["playerA"], history_df["playerB"]], ignore_index=True)).astype(str))
-    players = [p for p in (clean_text(x) for x in players) if p]
-
-    surfaces = safe_unique(history_df, "surface") or ["Hard", "Clay", "Grass", "Carpet"]
-    rounds = safe_unique(history_df, "round")
-    round_options = [t["round_any"]] + rounds
-
-    # odds toggle outside form
-    use_odds = st.checkbox(t["enter_odds"], value=False)
-
-    # SIMULATION SETTINGS (Outside Expander for visibility or inside as originally planned, but NO FORM)
-    # Removing st.form to allow interactive check/uncheck behavior
-    
-    col_input1, col_input2 = st.columns(2)
-    with col_input1:
-        # Player selection logic (using existing variables)
-        pass # The player selection is above this block in the file, we assume it's fine.
-             # We just need to confirm we aren't breaking indentation of lines 876-930 if we remove 'with st.form'.
-             # Actually, lines 876 'with st.form' wraps the whole block. I need to dedent EVERYTHING.
-             
-    # Since dedenting hundreds of lines is risky with replace, I will Close the form? 
-    # Or I can just replace the 'with st.form' line with a dummy and 'submitted' line with a st.button.
-    
-    # Strategy: Replace 'with st.form("whatif_form"):' with a dummy and 'submitted' line with a st.button.
-    if True: # Removed st.form
-        c1, c2 = st.columns(2)
-        with c1:
-            # Session State for Random Button
-            if "rand_idx_A" not in st.session_state: st.session_state.rand_idx_A = 0
-            playerA = st.selectbox(t["player_a"], players, index=st.session_state.rand_idx_A)
-        with c2:
-            if "rand_idx_B" not in st.session_state: st.session_state.rand_idx_B = 1 if len(players) > 1 else 0
-            playerB = st.selectbox(t["player_b"], players, index=st.session_state.rand_idx_B)
-
-        r1, r2, r3 = st.columns([1, 1, 1])
-        with r1:
-            match_date = st.date_input(t["match_date"], value=pd.Timestamp.today().date())
-        with r2:
-            surface = st.selectbox(t["surface"], surfaces, index=0)
-        with r3:
-            round_choice = st.selectbox(t["round_code"], round_options, index=0)
-
-        # Random Match Button (Small UI improvement)
-        if st.button("🎲 Random Match Example"):
-             import random
-             if len(players) > 2:
-                 idxA, idxB = random.sample(range(len(players)), 2)
-                 st.session_state.rand_idx_A = idxA
-                 st.session_state.rand_idx_B = idxB
-                 st.rerun()
-
-        oddsA = oddsB = None
-        if use_odds:
-            o1, o2 = st.columns(2)
-            with o1:
-                oddsA = st.number_input(t["odds_a"], min_value=1.01, value=2.0, step=0.01)
-            with o2:
-                oddsB = st.number_input(t["odds_b"], min_value=1.01, value=2.0, step=0.01)
-
-        st.markdown(f"#### {t['snap_title']}")
-        with st.expander(t["sim_settings"], expanded=False):
-            st.info(f"ℹ️ {t['snap_help']}")
-            
-            c_snap1, c_snap2 = st.columns(2)
-            with c_snap1:
-                use_snapA = st.checkbox(f"Simulate Date for {playerA}", key="use_snapA")
-                if use_snapA:
-                    snap_dateA = st.date_input(f"Date for {playerA}", value=match_date, key="date_snapA")
-                else:
-                    snap_dateA = None
-                    
-            with c_snap2:
-                use_snapB = st.checkbox(f"Simulate Date for {playerB}", key="use_snapB")
-                if use_snapB:
-                    snap_dateB = st.date_input(f"Date for {playerB}", value=match_date, key="date_snapB")
-                else:
-                    snap_dateB = None
-
-        submitted = st.button(t["calc"], type="primary")
-
-    if submitted:
-        date_ts = pd.Timestamp(match_date)
-        round_code = None if round_choice == t["round_any"] else round_choice
-
-        row_df = None
-        # No try/except - enforce new signature
         row_df = build_feature_row(
             history=history_df,
             feature_cols=feature_cols,
-            playerA=playerA,
-            playerB=playerB,
-            surface=surface,
-            date=date_ts,
-            round_code=round_code,
-            oddsA=float(oddsA) if oddsA is not None else None,
-            oddsB=float(oddsB) if oddsB is not None else None,
-            snapshot_dateA=pd.Timestamp(snap_dateA) if snap_dateA else None,
-            snapshot_dateB=pd.Timestamp(snap_dateB) if snap_dateB else None,
+            playerA=pa,
+            playerB=pb,
+            surface=str(surface),
+            date=pd.Timestamp(match_date),
+            round_code=round_code or None,
+            oddsA=None,
+            oddsB=None,
         )
+        X = imputer.transform(row_df[feature_cols])
+        p = float(model.predict_proba(X)[0, 1])
+    except Exception as e:
+        st.error(f"Could not score this matchup: {e}")
+        return
 
-        pA = predict_from_row(model, imputer, feature_cols, row_df)
-        pB = 1.0 - pA
-        winner = playerA if pA >= 0.5 else playerB
-        winner_prob = max(pA, pB)
-        conf = confidence_label(pA, t)
-        
-        # --- NEW RESULT UI ---
-        
-        is_A_winner = (winner == playerA)
-        # However, if players have same name, we use pA >= 0.5 logic
-        if playerA == playerB:
-             is_A_winner = (pA >= 0.5)
+    pick = pa if p >= 0.5 else pb
+    conf = p if p >= 0.5 else 1 - p
+    bar_a = int(round(p * 100))
+    bar_b = 100 - bar_a
 
-        # 1. Main Result Card
-        st.markdown(f"""
-        <div class="ps-card" style="text-align: center; border-left: 6px solid {'#ff4b4b' if is_A_winner else '#4b9cff'};">
-            <div style="font-size: 1rem; opacity: 0.8;">PREDICTION</div>
-            <div style="font-size: 2.2rem; font-weight: 800; margin: 10px 0;">
-                <span style="color: {'#ff4b4b' if is_A_winner else '#ddd'}">{playerA} {'🏆' if is_A_winner else ''}</span>
-                <span style="font-size: 1rem; vertical-align: middle; opacity: 0.5;">vs</span>
-                <span style="color: {'#4b9cff' if not is_A_winner else '#ddd'}">{playerB} {'🏆' if not is_A_winner else ''}</span>
+    img_a = player_image_html(pa, size=80)
+    img_b = player_image_html(pb, size=80)
+    st.markdown(
+        f"""
+        <div class="ps-card">
+          <div class="match-card" style="grid-template-columns: 1.4fr 1fr 1.4fr;">
+            <div style="display:flex;gap:14px;align-items:center;">
+              <div>{img_a}</div>
+              <div>
+                <div class="meta">{h(str(match_date))} · {h(str(surface))} {h(str(round_code) or '')}</div>
+                <div class="name">{h(pa)}</div>
+                <div class="meta">p(A wins) = {p*100:.1f}%</div>
+                <div class="bar-bg"><div class="bar-fill bar-a" style="width:{bar_a}%;"></div></div>
+              </div>
             </div>
-            <div style="font-size: 1.2rem;">
-                🏆 <b>{winner}</b> wins with <b>{winner_prob*100:.1f}%</b> probability
+            <div class="center">
+              <div class="vs">PREDICTION</div>
+              <div class="name" style="margin-top:6px;">{h(pick)}</div>
+              <div class="meta">{confidence_label(p)} confidence · {conf*100:.1f}%</div>
             </div>
-            <div style="margin-top: 10px; font-size: 0.9rem; opacity: 0.7;">
-                Confidence: <span style="color: yellow;">{conf}</span>
+            <div style="display:flex;gap:14px;align-items:center;justify-content:flex-end;">
+              <div style="text-align:right;">
+                <div class="name">{h(pb)}</div>
+                <div class="meta">p(B wins) = {(1-p)*100:.1f}%</div>
+                <div class="bar-bg"><div class="bar-fill bar-b" style="width:{bar_b}%;"></div></div>
+              </div>
+              <div>{img_b}</div>
             </div>
+          </div>
         </div>
-        """, unsafe_allow_html=True)
-        
-        # 2. Tale of the Tape & History
-        col_vis1, col_vis2 = st.columns([1, 1])
-        
-        with col_vis1:
-            st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-            render_tale_of_the_tape(row_df, playerA, playerB, surface)
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-        with col_vis2:
-            st.markdown("<div class='ps-card'>", unsafe_allow_html=True)
-            plot_elo_history(playerA, playerB, history_df)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        if dev_mode:
-            st.caption(f"[DEV] history source: {history_path}")
-            with st.expander("[DEV] feature row"):
-                st.dataframe(row_df[feature_cols].T, use_container_width=True, height=450)
-
-
-# =========================
-# Leaderboard tab
-# =========================
-with tab_leaderboard:
-    st.markdown(f"<div class='ps-card'><div class='ps-title'>{t['leaderboard_title']}</div></div>", unsafe_allow_html=True)
-
-    if "y" not in pred_df.columns or "playerA" not in pred_df.columns or "playerB" not in pred_df.columns:
-        st.error("Leaderboard requires columns: y, playerA, playerB (and date recommended).")
-        st.stop()
-
-    # Use global filters
-    lb = apply_global_filters(pred_df, g_d1, g_d2, g_surfaces)
-
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        min_matches = st.number_input(t["min_matches"], min_value=1, value=10, step=1, key="lb_min_matches")
-    with c2:
-        metric = st.selectbox(t["metric"], [t["winrate"], t["wins"], t["avg_edge"]], index=0, key="lb_metric")
-    with c3:
-        top_n = st.selectbox(t["top_n"], [10, 20, 50, 100], index=1, key="lb_topn")
-
-    a = lb[["date", "playerA", "y"]].copy()
-    a["player"] = a["playerA"]
-    a["win"] = (a["y"].astype(int) == 1).astype(int)
-    a["match"] = 1
-
-    b = lb[["date", "playerB", "y"]].copy()
-    b["player"] = b["playerB"]
-    b["win"] = (b["y"].astype(int) == 0).astype(int)
-    b["match"] = 1
-
-    pl = pd.concat([a[["date", "player", "win", "match"]], b[["date", "player", "win", "match"]]], ignore_index=True)
-
-    if "edge" in lb.columns:
-        a2 = lb[["date", "playerA", "edge"]].copy()
-        a2["player"] = a2["playerA"]
-        a2["edge_player"] = a2["edge"]
-
-        b2 = lb[["date", "playerB", "edge"]].copy()
-        b2["player"] = b2["playerB"]
-        b2["edge_player"] = -b2["edge"]
-
-        ed = pd.concat([a2[["date", "player", "edge_player"]], b2[["date", "player", "edge_player"]]], ignore_index=True)
-        pl = pl.merge(ed, on=["date", "player"], how="left")
-    else:
-        pl["edge_player"] = np.nan
-
-    agg = pl.groupby("player", as_index=False).agg(
-        matches=("match", "sum"),
-        wins=("win", "sum"),
-        avg_edge=("edge_player", "mean"),
+        """,
+        unsafe_allow_html=True,
     )
-    agg = agg[agg["matches"] >= int(min_matches)]
-    agg["win_rate"] = agg["wins"] / agg["matches"]
 
-    if metric == t["winrate"]:
-        agg = agg.sort_values(["win_rate", "matches"], ascending=[False, False])
-    elif metric == t["wins"]:
-        agg = agg.sort_values(["wins", "matches"], ascending=[False, False])
-    else:
-        if agg["avg_edge"].notna().any():
-            agg = agg.sort_values(["avg_edge", "matches"], ascending=[False, False])
+    cols = st.columns([1, 1, 4])
+    with cols[0]:
+        st.button(f"Open profile: {pa}", key="w_open_pa", on_click=navigate_to_player, args=(pa,), width="stretch")
+    with cols[1]:
+        st.button(f"Open profile: {pb}", key="w_open_pb", on_click=navigate_to_player, args=(pb,), width="stretch")
+
+
+# =============================================================================
+# Tab: Leaderboard
+# =============================================================================
+
+def tab_leaderboard(history_df: pd.DataFrame) -> None:
+    st.markdown("<div class='ps-section-title'>Leaderboard</div>", unsafe_allow_html=True)
+    if history_df.empty:
+        st.markdown('<div class="empty-state">No history dataset available.</div>', unsafe_allow_html=True)
+        return
+
+    surf_opts = sorted(history_df["surface"].dropna().unique().tolist())
+    year_min = int(history_df["date"].dt.year.dropna().min())
+    year_max = int(history_df["date"].dt.year.dropna().max())
+
+    f1, f2, f3, f4 = st.columns([1.4, 2, 2, 1.2])
+    with f1:
+        min_matches = st.number_input("Min matches", min_value=10, max_value=1000, value=80, step=10, key="l_min")
+    with f2:
+        if year_min < year_max:
+            year_range = st.slider(
+                "Window",
+                min_value=year_min,
+                max_value=year_max,
+                value=(max(year_min, year_max - 5), year_max),
+                key="l_years",
+            )
         else:
-            agg = agg.sort_values(["win_rate", "matches"], ascending=[False, False])
+            year_range = (year_min, year_max)
+    with f3:
+        sel_surfaces = st.multiselect("Surface", surf_opts, default=surf_opts, key="l_surfaces")
+    with f4:
+        top_n = st.slider("Top N", 10, 200, 50, key="l_topn")
 
-    # Rename columns for UI
-    agg = agg.rename(columns={
-        "player": "Player",
-        "matches": "Matches Played",
-        "wins": "Wins",
-        "win_rate": "Win Rate",
-        "avg_edge": "Avg Value"
-    })
+    df = history_df.copy()
+    df = df[(df["date"].dt.year >= year_range[0]) & (df["date"].dt.year <= year_range[1])]
+    if sel_surfaces:
+        df = df[df["surface"].isin(sel_surfaces)]
+    if df.empty:
+        st.markdown('<div class="empty-state">No matches in the current selection.</div>', unsafe_allow_html=True)
+        return
 
-    # Scale to percentage
-    if "Win Rate" in agg.columns: agg["Win Rate"] = agg["Win Rate"] * 100
-    if "Avg Value" in agg.columns: agg["Avg Value"] = agg["Avg Value"] * 100
+    wins = df["playerA"].value_counts()
+    losses = df["playerB"].value_counts()
+    lb = pd.DataFrame({"Wins": wins, "Losses": losses}).fillna(0)
+    lb["Matches"] = lb["Wins"] + lb["Losses"]
+    lb["Win rate"] = lb["Wins"] / lb["Matches"].replace(0, np.nan)
+    lb = lb[lb["Matches"] >= int(min_matches)].sort_values(["Win rate", "Wins"], ascending=[False, False])
+    lb = lb.head(int(top_n))
+    lb.index.name = "Player"
+    lb = lb.reset_index()
+    lb.insert(0, "Rank", np.arange(1, len(lb) + 1))
+    lb["Win rate"] = lb["Win rate"] * 100
+    for c in ("Wins", "Losses", "Matches"):
+        lb[c] = lb[c].astype(int)
 
     st.dataframe(
-        agg.head(top_n), 
-        use_container_width=True, 
-        height=420,
+        lb[["Rank", "Player", "Matches", "Wins", "Losses", "Win rate"]],
+        width="stretch",
+        hide_index=True,
+        height=560,
         column_config={
-            "Win Rate": st.column_config.NumberColumn(format="%.1f%%"),
-            "Avg Value": st.column_config.NumberColumn(format="%.1f%%"),
-        }
+            "Rank": st.column_config.NumberColumn("Rank", width="small"),
+            "Wins": st.column_config.NumberColumn("Wins", width="small"),
+            "Losses": st.column_config.NumberColumn("Losses", width="small"),
+            "Matches": st.column_config.NumberColumn("Matches", width="small"),
+            "Win rate": st.column_config.NumberColumn("Win rate", format="%.1f%%"),
+        },
     )
 
-    if dev_mode:
-        st.caption(f"[DEV] leaderboard rows after global filters: {len(lb):,}")
+    # Jump-to-profile dropdown
+    st.caption("Open a profile from the leaderboard:")
+    pick = st.selectbox("Player", ["—"] + lb["Player"].tolist(), key="l_jump")
+    if pick != "—":
+        st.button(f"Open profile: {pick}", key="l_open", on_click=navigate_to_player, args=(pick,), width="stretch")
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+_init_state()
+render_nav()
+render_hero()
+
+pred_df = load_predictions()
+history_df = load_history()
+render_kpis(pred_df)
+render_top_nav_buttons()
+
+view = st.session_state.get("view", "Matches")
+if view == "Matches":
+    tab_matches(pred_df)
+elif view == "Upcoming":
+    tab_upcoming(history_df)
+elif view == "Players":
+    tab_players(history_df)
+elif view == "Tournaments":
+    tab_tournaments(history_df)
+elif view == "What-if":
+    tab_whatif(history_df)
+elif view == "Leaderboard":
+    tab_leaderboard(history_df)
+else:
+    tab_matches(pred_df)

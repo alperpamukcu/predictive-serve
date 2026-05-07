@@ -61,12 +61,12 @@ def load_bo5_tournaments_from_raw():
 
 def infer_best_of(row, set_w_cols, has_best_of, has_series, has_tournament, bo5_tournaments):
     """
-    Maçın 3 setlik mi 5 setlik mi olduğunu tahmin et.
-    Önce doğrudan 'Best of' kolonu, sonra turnuva adı, sonra set sayısı / seri kullanılır.
+    Decide whether a match is best-of-3 or best-of-5 using ONLY pre-match info
+    (the 'Best of' column, the tournament name, and the Series tier).
+    Set counts (W1..W5 / L1..L5) are NOT consulted here; using them would be
+    a post-match leak.
     """
-    total_sets = row[set_w_cols].notna().sum()
-
-    # 1) Eğer 'Best of' kolonu varsa, onu kullan
+    # 1) Authoritative 'Best of' column (present for the entire tennis-data.co.uk archive)
     if has_best_of:
         try:
             bo = int(row["Best of"])
@@ -75,7 +75,7 @@ def infer_best_of(row, set_w_cols, has_best_of, has_series, has_tournament, bo5_
         except Exception:
             pass
 
-    # 2) Turnuva adına göre (allyears'tan çıkardığımız BO5 listesi)
+    # 2) Tournament-name lookup (Grand Slams are BO5)
     if has_tournament:
         tourn = row["Tournament"]
         if isinstance(tourn, str):
@@ -83,19 +83,13 @@ def infer_best_of(row, set_w_cols, has_best_of, has_series, has_tournament, bo5_
             if t_name in bo5_tournaments:
                 return 5
 
-    # 3) Set sayısından kesin çıkarabildiklerimiz
-    if total_sets >= 4:
-        return 5  # 4 veya 5 set oynanmışsa bu maç best-of-5'tir
-    if total_sets <= 2:
-        return 3  # 2 setlik maç pratikte best-of-3 kabul edilebilir
-
-    # 4) 3 setlik maçlar için Series bilgisi varsa
+    # 3) Series tier ("Grand Slam" → BO5)
     if has_series:
         series = row["Series"]
         if isinstance(series, str) and "Grand Slam" in series:
             return 5
 
-    # 5) Varsayılan: best-of-3
+    # 4) Default: best-of-3
     return 3
 
 

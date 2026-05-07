@@ -52,24 +52,34 @@ def _proxies_from_env() -> dict | None:
 
 def download_season(year: int, sess: requests.Session, base_url: str, timeout_s: int, retries: int) -> pd.DataFrame:
     """
-    Verilen yıl için tennis-data.co.uk'den .xlsx dosyasını indirir ve DataFrame'e çevirir.
-    Örn: http://www.tennis-data.co.uk/2020/2020.xlsx
+    Download a season's archive from tennis-data.co.uk.
+
+    The site keeps recent years in ``.xlsx`` and pre-2013 years in legacy
+    ``.xls``. We try the modern format first and fall back to ``.xls`` (which
+    requires the ``xlrd`` package).
     """
-    url = f"{base_url.rstrip('/')}/{year}/{year}.xlsx"
-    print(f"[fetch_data] Downloading {year} from {url}")
     proxies = _proxies_from_env()
     last_err: Exception | None = None
-    for attempt in range(1, max(1, retries) + 1):
-        try:
-            resp = sess.get(url, timeout=timeout_s, proxies=proxies)
-            resp.raise_for_status()
-            buffer = BytesIO(resp.content)
-            df = pd.read_excel(buffer)
-            df["source_year"] = year
-            return df
-        except Exception as e:
-            last_err = e
-            print(f"[fetch_data] WARNING: {year} attempt {attempt}/{retries} failed: {e}")
+    for ext, engine in [("xlsx", "openpyxl"), ("xls", "xlrd")]:
+        url = f"{base_url.rstrip('/')}/{year}/{year}.{ext}"
+        print(f"[fetch_data] Downloading {year} from {url}")
+        for attempt in range(1, max(1, retries) + 1):
+            try:
+                resp = sess.get(url, timeout=timeout_s, proxies=proxies, allow_redirects=True)
+                resp.raise_for_status()
+                # If the redirect lands on a different extension, the engine still applies.
+                buffer = BytesIO(resp.content)
+                try:
+                    df = pd.read_excel(buffer, engine=engine)
+                except ImportError:
+                    # xlrd missing — fall back to default engine inference
+                    buffer.seek(0)
+                    df = pd.read_excel(buffer)
+                df["source_year"] = year
+                return df
+            except Exception as e:
+                last_err = e
+                print(f"[fetch_data] WARNING: {year}.{ext} attempt {attempt}/{retries} failed: {e}")
     assert last_err is not None
     raise last_err
 
