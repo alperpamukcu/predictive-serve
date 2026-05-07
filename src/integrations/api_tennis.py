@@ -114,6 +114,18 @@ def get_odds(cfg: ApiTennisConfig, match_key: str) -> Dict[str, Any]:
     return res if isinstance(res, dict) else {}
 
 
+def get_players(cfg: ApiTennisConfig, player_key: int | str) -> Dict[str, Any]:
+    """Fetch a single player's full record (name, country, birthday, logo)."""
+    payload = _get(cfg, {"method": "get_players", "player_key": str(player_key)})
+    res = payload.get("result") or []
+    if isinstance(res, list) and res:
+        first = res[0]
+        return first if isinstance(first, dict) else {}
+    if isinstance(res, dict):
+        return res
+    return {}
+
+
 def consensus_decimal_moneyline(odds_payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], int]:
     """
     Extract a consensus (median) Home/Away decimal price across books.

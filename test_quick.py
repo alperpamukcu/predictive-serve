@@ -1,89 +1,89 @@
-# -*- coding: utf-8 -*-
 """
-Hizli Test - Sadece kritik kontroller
+Lightweight smoke test — verifies that the source tree imports cleanly and
+the leakage-safe feature selector is wired correctly. Generated artifacts
+(CSV/PKL) are intentionally NOT required because they're built by the
+pipeline at runtime.
 """
 
 import sys
-from pathlib import Path
 
-def test_basic():
-    """Temel dosya ve klasor kontrolleri"""
+
+def test_basic() -> bool:
     print("=" * 60)
-    print("HIZLI TEST - Temel Kontroller")
+    print("Predictive Serve — quick smoke test")
     print("=" * 60)
-    
-    errors = []
-    warnings = []
-    
-    # Config kontrolu
+
+    errors: list[str] = []
+
+    # 1) Core imports
     try:
-        from src.utils.config import PROJECT_ROOT, DATA_DIR, PROCESSED_DIR, MODELS_DIR
-        print("[OK] Config modulu yuklendi")
-    except Exception as e:
-        errors.append(f"Config modulu: {e}")
-        print(f"[FAIL] Config modulu: {e}")
-        return
-    
-    # Klasorler
-    dirs = [
-        (DATA_DIR, "data/"),
-        (PROCESSED_DIR, "data/processed/"),
-        (MODELS_DIR, "models/"),
-    ]
-    for dir_path, name in dirs:
-        if dir_path.exists():
-            print(f"[OK] {name} klasoru mevcut")
-        else:
-            errors.append(f"{name} klasoru eksik")
-            print(f"[FAIL] {name} klasoru eksik")
-    
-    # Kritik dosyalar
-    critical_files = [
-        (PROCESSED_DIR / "train_dataset.csv", "train_dataset.csv"),
-        (MODELS_DIR / "logreg_final.pkl", "logreg_final.pkl"),
-        (MODELS_DIR / "imputer_final.pkl", "imputer_final.pkl"),
-        (MODELS_DIR / "feature_columns.txt", "feature_columns.txt"),
-    ]
-    
-    for file_path, name in critical_files:
-        if file_path.exists():
-            size = file_path.stat().st_size
-            print(f"[OK] {name} mevcut ({size:,} bytes)")
-        else:
-            errors.append(f"{name} eksik")
-            print(f"[FAIL] {name} eksik")
-    
-    # Opsiyonel dosyalar
-    optional_files = [
-        (PROCESSED_DIR / "all_predictions.csv", "all_predictions.csv"),
-        (PROCESSED_DIR / "val_predictions.csv", "val_predictions.csv"),
-    ]
-    
-    for file_path, name in optional_files:
-        if file_path.exists():
-            print(f"[INFO] {name} mevcut (opsiyonel)")
-        else:
-            warnings.append(f"{name} eksik (opsiyonel)")
-    
-    # Ozet
-    print("\n" + "=" * 60)
-    print("OZET")
-    print("=" * 60)
-    
-    if not errors:
-        print("[OK] Tum kritik dosyalar mevcut!")
-        if warnings:
-            print(f"[WARN] {len(warnings)} opsiyonel dosya eksik")
-        return True
+        from src.utils.config import DATA_DIR, MODELS_DIR, PROCESSED_DIR, PROJECT_ROOT  # noqa: F401
+        from src.utils.feature_utils import (
+            LEAKY_MARKET_COLS,
+            META_COLS,
+            select_model_features,
+        )
+        from src.utils.surface import guess_surface_from_tournament
+        from src.data import cleaning, fetch_data, preprocess, schema  # noqa: F401
+        from src.features import build_features, elo, form, sets  # noqa: F401
+        from src.models import score_all_matches, train_best, train_logreg  # noqa: F401
+        from src.integrations.api_tennis import (
+            ApiTennisConfig,
+            consensus_decimal_moneyline,
+            get_fixtures,
+        )  # noqa: F401
+        print("[OK] All source modules import cleanly.")
+    except Exception as e:  # pragma: no cover
+        print(f"[FAIL] Import error: {e}")
+        errors.append(str(e))
+        return False
+
+    # 2) Leakage guard sanity
+    market_examples = ["oddsA", "oddsB", "pA_market", "logit_pA_market"]
+    columns = ["eloA", "eloB", "elo_diff"] + market_examples + ["form_winrateA_5"]
+    selected = select_model_features(columns, include_market=False)
+    leaked = [c for c in market_examples if c in selected]
+    if leaked:
+        msg = f"select_model_features still emits market columns: {leaked}"
+        print(f"[FAIL] {msg}")
+        errors.append(msg)
     else:
-        print(f"[FAIL] {len(errors)} kritik hata bulundu:")
+        print(f"[OK] LEAKY_MARKET_COLS ({len(LEAKY_MARKET_COLS)}) excluded from training set.")
+
+    # 3) Surface inference sanity
+    cases = {
+        "Roland Garros": "Clay",
+        "Wimbledon": "Grass",
+        "US Open": "Hard",
+        "Madrid": "Clay",
+    }
+    for tour, expected in cases.items():
+        got = guess_surface_from_tournament(tour)
+        if got != expected:
+            errors.append(f"Surface inference {tour} -> {got} (expected {expected})")
+            print(f"[FAIL] Surface {tour} -> {got} (expected {expected})")
+        else:
+            print(f"[OK] Surface inference {tour} -> {got}")
+
+    # 4) Streamlit app parses
+    try:
+        import ast
+
+        ast.parse(open("streamlit_app.py", encoding="utf-8").read())
+        print("[OK] streamlit_app.py parses.")
+    except Exception as e:
+        errors.append(f"streamlit_app.py parse: {e}")
+        print(f"[FAIL] streamlit_app.py parse: {e}")
+
+    print("=" * 60)
+    if errors:
+        print(f"[FAIL] {len(errors)} issue(s):")
         for err in errors:
             print(f"  - {err}")
         return False
+    print("[OK] All structural checks passed.")
+    return True
+
 
 if __name__ == "__main__":
-    success = test_basic()
-    sys.exit(0 if success else 1)
-
-
-
+    sys.exit(0 if test_basic() else 1)

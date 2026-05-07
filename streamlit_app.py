@@ -34,9 +34,19 @@ from joblib import load as joblib_load
 
 from src.utils.assets import find_image, slugify
 from src.utils.avatars import svg_avatar_data_uri
-from src.utils.config import MODELS_DIR, PROCESSED_DIR, PROJECT_ROOT
+from src.utils.config import DATA_DIR, MODELS_DIR, PROCESSED_DIR, PROJECT_ROOT
+from src.utils.country import flag_emoji
 from src.utils.env import getenv, try_load_dotenv
 from src.utils.feature_utils import load_feature_list
+from src.utils.player_meta import (
+    PlayerMeta,
+    age_from_bday,
+    attach_country,
+    find_player_in_fixtures,
+    is_doubles,
+    load_cache as load_player_cache,
+    save_cache as save_player_cache,
+)
 
 try:
     from src.predict.whatif import build_feature_row  # type: ignore
@@ -44,10 +54,15 @@ except Exception:  # pragma: no cover
     build_feature_row = None  # type: ignore
 
 try:
-    from src.integrations.api_tennis import ApiTennisConfig, get_fixtures  # type: ignore
+    from src.integrations.api_tennis import (  # type: ignore
+        ApiTennisConfig,
+        get_fixtures,
+        get_players,
+    )
 except Exception:  # pragma: no cover
     ApiTennisConfig = None  # type: ignore
     get_fixtures = None  # type: ignore
+    get_players = None  # type: ignore
 
 
 # =============================================================================
@@ -318,14 +333,53 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 }
 
 /* Player profile header */
-.profile-header { display:flex; gap:18px; align-items:center; padding:18px;
-  border:1px solid var(--line); border-radius: var(--radius);
-  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+.profile-header { display:flex; gap:20px; align-items:center; padding:20px 22px;
+  border:1px solid var(--line); border-radius: var(--radius-lg);
+  background:
+    radial-gradient(600px 220px at 0% 0%, rgba(106,169,255,0.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
   margin-bottom: 14px;
 }
-.profile-header .avatar img { width:120px; height:120px; border-radius:50%; border:2px solid var(--line-strong); object-fit:cover; background:var(--surface); }
-.profile-header .meta-block .name { font-size:1.6rem; font-weight:800; color:#fff; letter-spacing:-0.02em; }
-.profile-header .meta-block .sub { color:var(--muted); margin-top:4px; }
+.profile-header .avatar { flex: 0 0 auto; width:120px; height:120px; }
+.profile-header .meta-block { flex: 1 1 auto; min-width: 0; }
+.profile-header .meta-block .name { font-size:1.85rem; font-weight:800; color:#fff; letter-spacing:-0.02em; line-height: 1.1; }
+.profile-header .meta-block .name .flag { font-size:1.6rem; margin-right:10px; }
+.profile-header .meta-block .sub { color:var(--muted); margin-top:6px; font-size:0.95rem; }
+.profile-header .meta-chips { margin-top: 10px; display:flex; flex-wrap:wrap; gap:8px; }
+.profile-header .chip {
+  padding:5px 12px; border-radius:999px;
+  background: var(--surface-2); border:1px solid var(--line);
+  color: var(--text); font-size:0.82rem; font-weight:600;
+}
+
+/* Tournament hero card */
+.tour-hero {
+  padding: 22px 24px; margin-bottom: 14px;
+  border-radius: var(--radius-lg); border:1px solid var(--line);
+  background:
+    radial-gradient(700px 200px at 90% -20%, rgba(255,141,99,0.12), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+  display:flex; gap:18px; align-items:center; justify-content: space-between;
+}
+.tour-hero .name { font-size: 1.7rem; font-weight: 800; color:#fff; letter-spacing:-0.02em; line-height: 1.1; }
+.tour-hero .sub { color: var(--muted); margin-top: 6px; }
+.tour-hero .badges { display:flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.tour-hero .badge {
+  padding: 5px 11px; border-radius: 999px; font-size: 0.78rem; font-weight: 700;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+}
+
+/* Details disclosure */
+details.ps-details {
+  margin: -4px 0 12px 0;
+}
+details.ps-details summary {
+  cursor: pointer; color: var(--muted); font-size: 0.85rem;
+  letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700;
+  padding: 8px 0; user-select: none;
+}
+details.ps-details summary::-webkit-details-marker { color: var(--muted); }
+details.ps-details[open] summary { color: var(--text); }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -481,7 +535,11 @@ def _api_key() -> Optional[str]:
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def cached_recent_api_fixtures() -> List[Dict[str, Any]]:
-    """Pull a wide window of fixtures once for image lookup."""
+    """
+    Pull a moderately wide window of fixtures for player metadata lookup.
+    The API rejects very wide windows (500), so we chunk into 14-day slices
+    that we know work and merge the results.
+    """
     if get_fixtures is None or ApiTennisConfig is None:
         return []
     key = _api_key()
@@ -489,81 +547,118 @@ def cached_recent_api_fixtures() -> List[Dict[str, Any]]:
         return []
     cfg = ApiTennisConfig(api_key=key, cache_ttl_s=86400)
     today = dt.date.today()
-    try:
-        return list(get_fixtures(cfg, today - dt.timedelta(days=120), today + dt.timedelta(days=30)))
-    except Exception:
-        return []
+    chunks = [
+        (today - dt.timedelta(days=14), today),
+        (today, today + dt.timedelta(days=14)),
+    ]
+    out: List[Dict[str, Any]] = []
+    for start, stop in chunks:
+        try:
+            out.extend(get_fixtures(cfg, start, stop))
+        except Exception:
+            continue
+    return out
 
 
-def _name_aliases(name: str) -> set:
-    """Aliases used to match a 'Sinner J.' style history name with a 'Jannik
-    Sinner' style API name."""
-    if not name:
-        return set()
-    s = name.strip().lower()
-    if not s:
-        return set()
-    aliases = {s}
-    norm = re.sub(r"[.,]", " ", s)
-    norm = re.sub(r"\s+", " ", norm).strip()
-    aliases.add(norm)
-    parts = norm.split()
-    if len(parts) >= 2:
-        first = parts[0]
-        last = parts[-1]
-        # If "X Y" with last part single letter -> it's surname-initial format.
-        if len(last) == 1:
-            aliases.add(first)  # surname
-            aliases.add(f"{last} {first}")  # "j sinner" -> match API "j sinner"-ish
-        else:
-            aliases.add(last)  # surname
-            if len(first) >= 1:
-                aliases.add(f"{last} {first[0]}")  # API to history-style
-    return {a for a in aliases if len(a) >= 2}
+# ---------------------------------------------------------------------------
+# Player metadata: nationality, age, photo (via API-Tennis get_players)
+# ---------------------------------------------------------------------------
+
+PLAYER_META_DIR = DATA_DIR / "cache"
 
 
-def _safe_name_match(history_name: str, api_name: str) -> bool:
-    h_aliases = _name_aliases(history_name)
-    a_aliases = _name_aliases(api_name)
-    common = h_aliases & a_aliases
-    # Reject single-letter intersections (too noisy).
-    return any(len(c) >= 3 for c in common)
+def _load_player_cache() -> dict:
+    return load_player_cache(PLAYER_META_DIR)
+
+
+def _save_player_cache(cache: dict) -> None:
+    save_player_cache(PLAYER_META_DIR, cache)
+
+
+def get_player_meta(name: str, *, force_refresh: bool = False) -> PlayerMeta:
+    """
+    Resolve a history-style player name into a PlayerMeta record using the
+    cache first, then API-Tennis if a key is configured. Always returns a
+    PlayerMeta; check ``not_found`` and missing fields to decide what to show.
+    """
+    cache = _load_player_cache()
+    if not force_refresh and name in cache:
+        cached = cache[name]
+        if cached.fetched_at:
+            return cached
+
+    meta = PlayerMeta(name=name)
+
+    if ApiTennisConfig is None or get_players is None or _api_key() is None:
+        meta.not_found = True
+        meta.fetched_at = dt.datetime.utcnow().isoformat() + "Z"
+        cache[name] = attach_country(meta)
+        _save_player_cache(cache)
+        return cache[name]
+
+    fixtures = cached_recent_api_fixtures()
+    player_key, api_name, logo_url = find_player_in_fixtures(name, fixtures)
+    meta.player_key = player_key
+    meta.logo_url = logo_url
+
+    if player_key:
+        try:
+            cfg = ApiTennisConfig(api_key=_api_key(), cache_ttl_s=86400)
+            record = get_players(cfg, player_key)
+            meta.full_name = record.get("player_full_name") or record.get("player_name") or api_name
+            meta.country = record.get("player_country")
+            meta.birthday = record.get("player_bday")
+            meta.age = age_from_bday(meta.birthday)
+            meta.logo_url = record.get("player_logo") or meta.logo_url
+        except Exception:
+            pass
+
+    meta = attach_country(meta)
+    meta.not_found = meta.player_key is None and not meta.country and not meta.logo_url
+    meta.fetched_at = dt.datetime.utcnow().isoformat() + "Z"
+    cache[name] = meta
+    _save_player_cache(cache)
+
+    # Persist photo to the assets cache
+    if meta.logo_url and meta.logo_url.startswith("http"):
+        out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
+        if force_refresh or not find_image(ASSETS_DIR / "players" / slugify(name)):
+            out.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                r = requests.get(meta.logo_url, timeout=20)
+                r.raise_for_status()
+                out.write_bytes(r.content)
+            except Exception:
+                pass
+
+    return meta
 
 
 def fetch_player_image_via_api(name: str) -> Optional[Path]:
-    if not name:
-        return None
-    fixtures = cached_recent_api_fixtures()
-    if not fixtures:
-        return None
-    target_url: Optional[str] = None
-    for ev in fixtures:
-        for player_field, logo_field in [
-            ("event_first_player", "event_first_player_logo"),
-            ("event_second_player", "event_second_player_logo"),
-        ]:
-            api_name = (ev.get(player_field) or "").strip()
-            if not api_name:
-                continue
-            if _safe_name_match(name, api_name):
-                logo = (ev.get(logo_field) or "").strip()
-                if logo and logo.startswith("http"):
-                    target_url = logo
-                    break
-        if target_url:
-            break
-    if not target_url:
-        return None
+    meta = get_player_meta(name, force_refresh=True)
+    if meta and meta.logo_url:
+        path = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
+        if path.exists():
+            return path
+        # download is performed inside get_player_meta — try again if cache hit before
+        try:
+            r = requests.get(meta.logo_url, timeout=20)
+            r.raise_for_status()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(r.content)
+            return path
+        except Exception:
+            return None
+    return None
 
-    out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        r = requests.get(target_url, timeout=20)
-        r.raise_for_status()
-        out.write_bytes(r.content)
-        return out
-    except Exception:
-        return None
+
+def player_label(name: str) -> str:
+    """Dropdown label for a player — prefixed with country flag if known."""
+    cache = _load_player_cache()
+    meta = cache.get(name)
+    if meta and meta.flag and meta.flag != "🏳️":
+        return f"{meta.flag}  {name}"
+    return name
 
 
 def player_image_html(name: str, size: int = 120) -> str:
@@ -700,11 +795,42 @@ def render_kpis(df: pd.DataFrame) -> None:
         return
     from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 
+    sub = sub.sort_values("date")
     y = sub["y"].astype(int).values
     p = sub["p_model"].astype(float).values
     ll = log_loss(y, p)
     br = brier_score_loss(y, p)
     ac = accuracy_score(y, (p >= 0.5).astype(int))
+
+    # Last 7 days within the selection
+    cutoff = sub["date"].max() - pd.Timedelta(days=7)
+    last_week = sub[sub["date"] > cutoff]
+    if not last_week.empty:
+        ywk = last_week["y"].astype(int).values
+        pwk = last_week["p_model"].astype(float).values
+        wk_acc = accuracy_score(ywk, (pwk >= 0.5).astype(int))
+        wk_n = len(last_week)
+    else:
+        wk_acc, wk_n = None, 0
+
+    # Last 20 picks chronologically
+    last20 = sub.tail(20)
+    if not last20.empty:
+        y20 = last20["y"].astype(int).values
+        p20 = last20["p_model"].astype(float).values
+        p20_acc = accuracy_score(y20, (p20 >= 0.5).astype(int))
+    else:
+        p20_acc = None
+
+    headline = [
+        _kpi("Predictions", f"{len(sub):,}", f"{sub['date'].min().date()} - {sub['date'].max().date()}"),
+        _kpi("Pick accuracy", _fmt_pct(ac), "share of correct AI picks"),
+        _kpi("Last 7 days", _fmt_pct(wk_acc), f"on {wk_n:,} matches"),
+        _kpi("Last 20 picks", _fmt_pct(p20_acc), f"on {min(20, len(sub)):,} most recent"),
+    ]
+    st.markdown(f'<div class="ps-kpi-grid">{"".join(headline)}</div>', unsafe_allow_html=True)
+
+    # Secondary metrics (smaller, two-up) for technical readers
     high_mask = (p < 0.35) | (p > 0.65)
     high_n = int(high_mask.sum())
     high_acc = (
@@ -712,14 +838,17 @@ def render_kpis(df: pd.DataFrame) -> None:
         if high_n > 0
         else None
     )
-
-    tiles = [
-        _kpi("Predictions", f"{len(sub):,}", f"date range {sub['date'].min().date()} - {sub['date'].max().date()}"),
-        _kpi("Pick accuracy", _fmt_pct(ac), "share of correct AI picks"),
+    secondary = [
         _kpi("Log loss", _fmt_num(ll), "lower is better"),
-        _kpi("High-confidence accuracy", _fmt_pct(high_acc), f"on {high_n:,} confident calls"),
+        _kpi("Brier score", _fmt_num(br), "lower is better"),
+        _kpi("High-confidence picks", _fmt_pct(high_acc), f"on {high_n:,} confident calls (p<0.35 or p>0.65)"),
     ]
-    st.markdown(f'<div class="ps-kpi-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<details class="ps-details"><summary>Detailed metrics</summary>'
+        f'<div class="ps-kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">{"".join(secondary)}</div>'
+        f'</details>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_top_nav_buttons() -> None:
@@ -1264,7 +1393,7 @@ def tab_players(history_df: pd.DataFrame) -> None:
 
     options = flt.head(400).copy()
     label_for = {
-        row["player"]: f"{row['player']}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR  ·  {int(row['first_year'])}-{int(row['last_year'])}"
+        row["player"]: f"{player_label(row['player'])}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR  ·  {int(row['first_year'])}-{int(row['last_year'])}"
         for _, row in options.iterrows()
     }
     keys = list(options["player"])
@@ -1296,36 +1425,57 @@ def tab_players(history_df: pd.DataFrame) -> None:
     first_season = str(h_["date"].min().year)
     last_season = str(h_["date"].max().year)
 
+    # Best-effort metadata from API-Tennis (cached). Renders flag + age in header.
+    meta = get_player_meta(player)
+    flag_html = (
+        f'<span class="flag">{meta.flag}</span>'
+        if meta and meta.flag and meta.flag != "🏳️"
+        else ""
+    )
+    display_name = (meta.full_name or player) if meta else player
+
+    chips: list[str] = []
+    if meta and meta.country:
+        chips.append(f'<span class="chip">{h(meta.country)}</span>')
+    if meta and meta.age:
+        chips.append(f'<span class="chip">{meta.age} years</span>')
+    chips.append(f'<span class="chip">{first_season}-{last_season}</span>')
+    chips.append(f'<span class="chip">{total:,} matches</span>')
+    chips.append(f'<span class="chip">{winrate*100:.1f}% career WR</span>')
+
     img_html = player_image_html(player, size=120)
     st.markdown(
         f"""
         <div class="profile-header">
           <div class="avatar">{img_html}</div>
           <div class="meta-block">
-            <div class="name">{h(player)}</div>
-            <div class="sub">Career: {h(first_season)}-{h(last_season)} &middot; {total:,} matches &middot; {wins:,}-{losses:,} W-L &middot; {winrate*100:.1f}% WR</div>
+            <div class="name">{flag_html}{h(display_name)}</div>
+            <div class="sub">{wins:,} wins · {losses:,} losses</div>
+            <div class="meta-chips">{''.join(chips)}</div>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Image fetch action
     has_local_img = find_image(ASSETS_DIR / "players" / slugify(player)) is not None
     api_present = _api_key() is not None
-    img_cols = st.columns([1.4, 1.4, 4])
+    img_cols = st.columns([1.6, 1.4, 4])
     with img_cols[0]:
         if api_present:
-            if st.button("Fetch live photo", key="p_fetch_img", width="stretch"):
-                with st.spinner("Searching API-Tennis fixtures for this player..."):
+            if st.button("Fetch live photo + metadata", key="p_fetch_img", width="stretch"):
+                with st.spinner("Calling API-Tennis..."):
                     saved = fetch_player_image_via_api(player)
                 if saved is not None:
-                    st.success("Photo updated.")
+                    st.success("Photo + metadata updated.")
                     st.rerun()
                 else:
-                    st.warning("No matching player photo in recent fixtures.")
+                    st.warning(
+                        "No matching player in current API-Tennis fixtures (player may "
+                        "not have an active match in the last 14 days)."
+                    )
         else:
-            st.button("Fetch live photo", key="p_fetch_img_disabled", disabled=True, width="stretch")
+            st.button("Fetch live photo + metadata", key="p_fetch_img_disabled", disabled=True, width="stretch")
     with img_cols[1]:
         if has_local_img:
             if st.button("Reset to avatar", key="p_reset_img", width="stretch"):
@@ -1493,6 +1643,21 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
     players_seen = sub[["playerA", "playerB"]].stack().nunique()
     players_seen_label = f"{players_seen:,}"
 
+    surface_badges = "".join(f'<span class="badge">{h(s)}</span>' for s in surfaces)
+
+    st.markdown(
+        f"""
+        <div class="tour-hero">
+          <div>
+            <div class="name">🏆 {h(tour)}</div>
+            <div class="sub">{first_season} - {latest_season} &middot; {len(years)} editions &middot; {len(sub):,} matches recorded</div>
+            <div class="badges">{surface_badges}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     tiles_html = (
         _kpi("Editions", editions)
         + _kpi("Total matches", total_matches)
@@ -1557,7 +1722,7 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
 
     keys = list(directory["player"])
     label_for = {
-        row["player"]: f"{row['player']}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR"
+        row["player"]: f"{player_label(row['player'])}  -  {int(row['matches']):,} matches  ·  {(row['winrate']*100):.1f}% WR"
         for _, row in directory.iterrows()
     }
 
