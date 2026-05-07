@@ -43,9 +43,11 @@ def _strip_accents(s: str) -> str:
 def canonical_parts(name: str) -> tuple[Optional[str], str]:
     """Return ``(first_initial, surname)`` for *name* in lowercase.
 
-    Both ``Sinner J.`` and ``J. Sinner`` come back as ``("j", "sinner")``.
-    Hyphens collapse to spaces so ``Auger-Aliassime F.`` matches
-    ``F. Auger-Aliassime``.
+    Handles three input shapes that all collapse to the same canonical:
+        ``Sinner J.``        -> ``('j', 'sinner')``
+        ``J. Sinner``        -> ``('j', 'sinner')``
+        ``Jannik Sinner``    -> ``('j', 'sinner')``
+        ``Roberto Bautista-Agut`` -> ``('r', 'bautista agut')``
     """
     if not name:
         return None, ""
@@ -54,15 +56,24 @@ def canonical_parts(name: str) -> tuple[Optional[str], str]:
     s = re.sub(r"[-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     parts = [p for p in s.split() if p]
-    initial: Optional[str] = None
-    surname_parts: list[str] = []
-    for p in parts:
-        if len(p) == 1:
-            if initial is None:
-                initial = p
-        else:
-            surname_parts.append(p)
-    return initial, " ".join(surname_parts)
+    if not parts:
+        return None, ""
+
+    # 1) If any token is a single letter we treat it as the initial; the
+    #    remaining tokens are the surname (matches "Sinner J." / "J. Sinner").
+    initials = [p for p in parts if len(p) == 1]
+    if initials:
+        initial = initials[0]
+        surname = " ".join(p for p in parts if len(p) > 1)
+        return initial, surname
+
+    # 2) No explicit initial — assume the first token is the given name
+    #    ("Jannik Sinner") and convert it to its first letter.
+    if len(parts) >= 2:
+        return parts[0][0], " ".join(parts[1:])
+
+    # 3) Single token — surname only.
+    return None, parts[0]
 
 
 def names_match(a: str, b: str) -> bool:

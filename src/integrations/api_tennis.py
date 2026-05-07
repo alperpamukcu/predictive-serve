@@ -126,6 +126,14 @@ def get_players(cfg: ApiTennisConfig, player_key: int | str) -> Dict[str, Any]:
     return {}
 
 
+def get_standings(cfg: ApiTennisConfig, event_type: str = "ATP") -> List[Dict[str, Any]]:
+    """Get the ATP/WTA singles standings — returns 2k+ players with their
+    ``player_key``, full name, country, and ranking points."""
+    payload = _get(cfg, {"method": "get_standings", "event_type": event_type})
+    res = payload.get("result") or []
+    return res if isinstance(res, list) else []
+
+
 def consensus_decimal_moneyline(odds_payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], int]:
     """
     Extract a consensus (median) Home/Away decimal price across books.

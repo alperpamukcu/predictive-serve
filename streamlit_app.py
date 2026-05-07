@@ -61,11 +61,13 @@ try:
         ApiTennisConfig,
         get_fixtures,
         get_players,
+        get_standings,
     )
 except Exception:  # pragma: no cover
     ApiTennisConfig = None  # type: ignore
     get_fixtures = None  # type: ignore
     get_players = None  # type: ignore
+    get_standings = None  # type: ignore
 
 
 # =============================================================================
@@ -688,35 +690,133 @@ def player_label(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bulk metadata prefetch (parallel + cached)
+# Bulk metadata prefetch — ATP standings + parallel get_players for photos
 # ---------------------------------------------------------------------------
 
-def prefetch_player_meta(names: List[str], max_workers: int = 6, progress_cb=None) -> int:
-    """
-    Run ``get_player_meta`` for each *names* entry that doesn't yet have a
-    cache entry. Returns the number of players newly resolved.
+def _build_standings_index() -> Dict[Tuple[Optional[str], str], Dict[str, Any]]:
+    """Pull ATP standings (2k+ players) and index by (initial, surname)."""
+    if get_standings is None or ApiTennisConfig is None:
+        return {}
+    key = _api_key()
+    if not key:
+        return {}
+    cfg = ApiTennisConfig(api_key=key, cache_ttl_s=86400)
+    try:
+        rows = get_standings(cfg, "ATP")
+    except Exception:
+        return {}
+    index: Dict[Tuple[Optional[str], str], Dict[str, Any]] = {}
+    surname_only: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        full = (r.get("player") or "").strip()
+        if not full:
+            continue
+        ci = canonical_parts(full)
+        if not ci[1]:
+            continue
+        index.setdefault(ci, r)
+        surname_only.setdefault(ci[1], r)
+    # Merge surname-only fallbacks under (None, surname) key
+    for sur, row in surname_only.items():
+        index.setdefault((None, sur), row)
+    return index
+
+
+def prefetch_via_standings(history_names: List[str], progress_cb=None) -> Tuple[int, int]:
+    """Resolve as many history names as possible via a single ATP-standings
+    call (one API request gets us 2k+ players' full names + countries +
+    player_keys), then download photos in parallel.
+
+    Returns ``(resolved_count, total_attempted)``.
     """
     import concurrent.futures
 
     cache = _load_player_cache()
-    todo = [n for n in names if n and n not in cache]
-    if not todo:
-        return 0
+    standings_idx = _build_standings_index()
+    if not standings_idx:
+        return 0, 0
 
-    resolved = 0
-    total = len(todo)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(get_player_meta, n): n for n in todo}
-        for i, fut in enumerate(concurrent.futures.as_completed(futures), start=1):
-            try:
-                meta = fut.result()
-                if meta and not meta.not_found:
-                    resolved += 1
-            except Exception:
-                pass
-            if progress_cb:
-                progress_cb(i, total)
-    return resolved
+    # First pass: attach full_name + country + player_key from standings.
+    todo_for_photo: list[Tuple[str, int]] = []
+    new_resolved = 0
+    for name in history_names:
+        if not name:
+            continue
+        if name in cache and cache[name].fetched_at and not cache[name].not_found:
+            continue
+        i, sur = canonical_parts(name)
+        if not sur:
+            continue
+        row = (
+            standings_idx.get((i, sur))
+            or standings_idx.get((None, sur))
+        )
+        if not row:
+            continue
+        meta = PlayerMeta(name=name)
+        meta.full_name = (row.get("player") or "").strip() or None
+        meta.country = (row.get("country") or "").strip() or None
+        try:
+            meta.player_key = int(row.get("player_key")) if row.get("player_key") else None
+        except Exception:
+            meta.player_key = None
+        meta = attach_country(meta)
+        meta.fetched_at = dt.datetime.utcnow().isoformat() + "Z"
+        meta.not_found = meta.player_key is None
+        cache[name] = meta
+        new_resolved += 1
+        if meta.player_key:
+            todo_for_photo.append((name, meta.player_key))
+
+    _save_player_cache(cache)
+
+    # Second pass: parallel get_players for photo + birthday for the players
+    # we haven't yet downloaded a photo for.
+    def _fetch_photo(item: Tuple[str, int]) -> bool:
+        name, player_key = item
+        if find_image(ASSETS_DIR / "players" / slugify(name)):
+            return True  # already have a photo
+        try:
+            cfg = ApiTennisConfig(api_key=_api_key(), cache_ttl_s=86400)
+            record = get_players(cfg, player_key)
+            logo_url = record.get("player_logo") or ""
+            bday = record.get("player_bday") or ""
+            local_cache = _load_player_cache()
+            if name in local_cache:
+                if logo_url:
+                    local_cache[name].logo_url = logo_url
+                if bday:
+                    local_cache[name].birthday = bday
+                    local_cache[name].age = age_from_bday(bday)
+                _save_player_cache(local_cache)
+            if logo_url and logo_url.startswith("http"):
+                out = ASSETS_DIR / "players" / f"{slugify(name)}.jpg"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                r = requests.get(logo_url, timeout=20)
+                r.raise_for_status()
+                out.write_bytes(r.content)
+                return True
+        except Exception:
+            return False
+        return False
+
+    if todo_for_photo:
+        total = len(todo_for_photo)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_fetch_photo, item): item for item in todo_for_photo}
+            for i, _fut in enumerate(concurrent.futures.as_completed(futures), start=1):
+                if progress_cb:
+                    progress_cb(i, total)
+
+    return new_resolved, len(history_names)
+
+
+def fmt_date_long(d) -> str:
+    """``2026-04-28`` -> ``28 April 2026``. Cross-platform (no %-d / %#d)."""
+    if d is None or pd.isna(d):
+        return ""
+    ts = pd.Timestamp(d)
+    return f"{ts.day} {ts.strftime('%B')} {ts.year}"
 
 
 def player_image_html(name: str, size: int = 120) -> str:
@@ -1088,7 +1188,7 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
     correct_mask = (df["winner_pick"].values == actual_winner) if actual_winner is not None else None
 
     show = pd.DataFrame({
-        "Date": df["date"].dt.strftime("%Y-%m-%d"),
+        "Date": df["date"].map(fmt_date_long),
         "Surface": df["surface"],
         "Player A": df["playerA"].map(display_name),
         "Player B": df["playerB"].map(display_name),
@@ -1462,11 +1562,22 @@ def tab_players(history_df: pd.DataFrame) -> None:
         else:
             year_range = (year_min, year_max)
 
-    flt = directory[directory["matches"] >= int(min_matches)]
+    flt = directory[directory["matches"] >= int(min_matches)].copy()
     flt = flt[~((flt["last_year"] < year_range[0]) | (flt["first_year"] > year_range[1]))]
     if search:
         flt = flt[flt["player"].astype(str).str.lower().str.contains(search, na=False)]
-    flt = flt.sort_values(["matches", "wins"], ascending=[False, False])
+
+    # Sort: active players (last_year >= year_max - 1) first, then by WR
+    # (eligible only above MIN_WR_MATCHES so a one-game wonder doesn't beat
+    # career WRs). Inactive legends fall through after.
+    if not flt.empty:
+        active_cutoff = int(flt["last_year"].max()) - 1
+        flt["is_active"] = (flt["last_year"] >= active_cutoff).astype(int)
+        flt["sort_winrate"] = flt["winrate"].where(flt["matches"] >= 50, 0.0)
+        flt = flt.sort_values(
+            ["is_active", "sort_winrate", "matches"],
+            ascending=[False, False, False],
+        ).drop(columns=["is_active", "sort_winrate"])
 
     if flt.empty:
         st.markdown('<div class="empty-state">No players match the current filters.</div>', unsafe_allow_html=True)
@@ -1482,7 +1593,7 @@ def tab_players(history_df: pd.DataFrame) -> None:
     default_idx = keys.index(pre) if pre in keys else 0
 
     player = st.selectbox(
-        f"Select a player ({len(flt):,} match the filters, top 400 shown)",
+        f"Select a player ({len(flt):,} match the filters, sorted active first by WR)",
         keys,
         index=default_idx,
         format_func=lambda k: label_for.get(k, k),
@@ -1569,18 +1680,20 @@ def tab_players(history_df: pd.DataFrame) -> None:
                     pass
     with img_cols[2]:
         if api_present:
-            if st.button("Prefetch top 100 active players", key="p_bulk", width="stretch"):
-                top_names = list(directory.head(100)["player"])
-                progress = st.progress(0.0, text="Fetching metadata...")
-                done = {"i": 0}
+            if st.button("Sync ATP roster (full coverage)", key="p_bulk", width="stretch"):
+                names_to_resolve = list(directory["player"])
+                progress = st.progress(0.0, text="Pulling ATP standings + photos...")
 
                 def _cb(i, total):
-                    done["i"] = i
-                    progress.progress(i / max(1, total), text=f"{i} / {total}")
+                    progress.progress(i / max(1, total), text=f"Photo {i} / {total}")
 
-                resolved = prefetch_player_meta(top_names, max_workers=8, progress_cb=_cb)
+                with st.spinner("One-shot ATP standings call (covers ~2000 players)..."):
+                    resolved, attempted = prefetch_via_standings(names_to_resolve, progress_cb=_cb)
                 progress.empty()
-                st.success(f"Resolved {resolved} new players (cached for next runs).")
+                st.success(
+                    f"Synced ATP roster: {resolved:,} new players resolved "
+                    f"(out of {attempted:,} candidates). Photos cached locally."
+                )
                 st.rerun()
 
     tiles = (
@@ -1626,12 +1739,12 @@ def tab_players(history_df: pd.DataFrame) -> None:
     st.markdown("<div class='ps-section-title'>Recent matches</div>", unsafe_allow_html=True)
     recent = h_.sort_values("date", ascending=False).head(20).copy()
     recent_view = pd.DataFrame({
-        "Date": recent["date"].dt.strftime("%Y-%m-%d"),
+        "Date": recent["date"].map(fmt_date_long),
         "Tournament": recent.get("tournament", ""),
         "Surface": recent["surface"],
         "Round": recent.get("round", ""),
         "Result": np.where(recent["is_winner"] == 1, "Win", "Loss"),
-        "Opponent": recent["opponent"],
+        "Opponent": recent["opponent"].map(display_name),
         "Score": recent.get("score", ""),
     })
     st.dataframe(recent_view, width="stretch", hide_index=True, height=380)
@@ -1781,18 +1894,31 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
     st.markdown("<div class='ps-section-title'>Most recent matches</div>", unsafe_allow_html=True)
     recent = sub.sort_values("date", ascending=False).head(25).copy()
     recent_view = pd.DataFrame({
-        "Date": recent["date"].dt.strftime("%Y-%m-%d"),
+        "Date": recent["date"].map(fmt_date_long),
         "Round": recent.get("round", ""),
         "Surface": recent["surface"],
-        "Winner": recent["playerA"],
-        "Loser": recent["playerB"],
+        "Winner": recent["playerA"].map(display_name),
+        "Loser": recent["playerB"].map(display_name),
         "Score": recent.get("score", ""),
     })
-    st.dataframe(recent_view, width="stretch", hide_index=True, height=380)
+    st.dataframe(
+        recent_view,
+        width="stretch",
+        hide_index=True,
+        height=420,
+        column_config={
+            "Date": st.column_config.TextColumn("Date", width="medium"),
+            "Round": st.column_config.TextColumn("Round", width="small"),
+            "Surface": st.column_config.TextColumn("Surface", width="small"),
+            "Winner": st.column_config.TextColumn("Winner", width="medium"),
+            "Loser": st.column_config.TextColumn("Loser", width="medium"),
+            "Score": st.column_config.TextColumn("Score", width="medium"),
+        },
+    )
 
     st.caption("Open a player from this tournament:")
     plr_options = ["—"] + sorted(pd.concat([recent["playerA"], recent["playerB"]]).dropna().astype(str).unique().tolist())
-    plr_pick = st.selectbox("Player", plr_options, key="t_jump_player")
+    plr_pick = st.selectbox("Player", plr_options, format_func=lambda k: ("—" if k == "—" else player_label(k)), key="t_jump_player")
     if plr_pick != "—":
         st.button(f"Open profile: {plr_pick}", key="t_open_player", on_click=navigate_to_player, args=(plr_pick,), width="stretch")
 
@@ -1914,6 +2040,90 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
 # Tab: Leaderboard
 # =============================================================================
 
+def _leaderboard_table(df: pd.DataFrame, pred_df: pd.DataFrame, min_matches: int) -> pd.DataFrame:
+    """
+    Build a richer leaderboard with:
+      - Matches / Wins / Losses / Win rate
+      - Last 30 days win rate
+      - Best surface
+      - AI accuracy on this player's matches (from predictions)
+      - Current win streak (positive = wins, negative = losses)
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    # Wins / losses
+    wins = df["playerA"].value_counts()
+    losses = df["playerB"].value_counts()
+    base = pd.DataFrame({"Wins": wins, "Losses": losses}).fillna(0).astype(int)
+    base["Matches"] = base["Wins"] + base["Losses"]
+    base = base[base["Matches"] >= int(min_matches)]
+    if base.empty:
+        return base
+    base["Win rate"] = (base["Wins"] / base["Matches"].replace(0, np.nan)) * 100
+
+    # Last 30 days win rate
+    cutoff = df["date"].max() - pd.Timedelta(days=30)
+    recent = df[df["date"] >= cutoff]
+    rwins = recent["playerA"].value_counts()
+    rlosses = recent["playerB"].value_counts()
+    rd = pd.DataFrame({"rw": rwins, "rl": rlosses}).fillna(0)
+    rd["L30 WR"] = (rd["rw"] / (rd["rw"] + rd["rl"]).replace(0, np.nan)) * 100
+    base["L30 WR"] = rd["L30 WR"]
+
+    # Best surface
+    surface_winrate: dict[str, str] = {}
+    grouped = df.groupby(["playerA", "surface"]).size().rename("w").reset_index()
+    grouped_l = df.groupby(["playerB", "surface"]).size().rename("l").reset_index()
+    surf_w = grouped.pivot(index="playerA", columns="surface", values="w").fillna(0)
+    surf_l = grouped_l.pivot(index="playerB", columns="surface", values="l").fillna(0)
+    surf_total = surf_w.add(surf_l, fill_value=0)
+    surf_wr = surf_w.div(surf_total.replace(0, np.nan)) * 100
+    for player in base.index:
+        if player in surf_wr.index:
+            row = surf_wr.loc[player].dropna()
+            row = row[surf_total.loc[player] >= 10] if player in surf_total.index else row
+            if not row.empty:
+                top_surface = row.idxmax()
+                surface_winrate[player] = f"{top_surface} ({row.max():.0f}%)"
+    base["Best surface"] = base.index.map(surface_winrate.get)
+
+    # AI accuracy on this player's matches (from predictions)
+    if not pred_df.empty and "p_model" in pred_df.columns and "y" in pred_df.columns:
+        p = pred_df.dropna(subset=["p_model", "y"]).copy()
+        p["pick"] = np.where(p["p_model"] >= 0.5, p["playerA"], p["playerB"])
+        p["actual"] = np.where(p["y"].astype(int) == 1, p["playerA"], p["playerB"])
+        p["correct"] = (p["pick"] == p["actual"]).astype(int)
+        # Player appears as A or B
+        for_a = p[p["playerA"].isin(base.index)].groupby("playerA")["correct"].agg(["sum", "count"])
+        for_b = p[p["playerB"].isin(base.index)].groupby("playerB")["correct"].agg(["sum", "count"])
+        combined = for_a.add(for_b, fill_value=0)
+        combined["AI Acc"] = (combined["sum"] / combined["count"].replace(0, np.nan)) * 100
+        base["AI accuracy"] = combined["AI Acc"]
+
+    # Current streak
+    streaks: dict[str, int] = {}
+    df_sorted = df.sort_values("date")
+    for player in base.index:
+        runs = df_sorted[(df_sorted["playerA"] == player) | (df_sorted["playerB"] == player)]
+        if runs.empty:
+            continue
+        # Walk from latest match backwards, counting consecutive same-result matches
+        outcomes = (runs["playerA"] == player).astype(int).values  # 1 = win, 0 = loss
+        last = outcomes[-1]
+        streak = 0
+        for o in outcomes[::-1]:
+            if o == last:
+                streak += 1
+            else:
+                break
+        streaks[player] = streak if last == 1 else -streak
+    base["Streak"] = base.index.map(streaks.get)
+
+    base.index.name = "Player"
+    return base.reset_index()
+
+
 def tab_leaderboard(history_df: pd.DataFrame) -> None:
     st.markdown("<div class='ps-section-title'>Leaderboard</div>", unsafe_allow_html=True)
     if history_df.empty:
@@ -1924,7 +2134,7 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
     year_min = int(history_df["date"].dt.year.dropna().min())
     year_max = int(history_df["date"].dt.year.dropna().max())
 
-    f1, f2, f3, f4 = st.columns([1.4, 2, 2, 1.2])
+    f1, f2, f3, f4, f5 = st.columns([1.2, 1.8, 1.8, 1.8, 1])
     with f1:
         min_matches = st.number_input("Min matches", min_value=10, max_value=1000, value=80, step=10, key="l_min")
     with f2:
@@ -1933,7 +2143,7 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
                 "Window",
                 min_value=year_min,
                 max_value=year_max,
-                value=(max(year_min, year_max - 5), year_max),
+                value=(max(year_min, year_max - 2), year_max),
                 key="l_years",
             )
         else:
@@ -1941,7 +2151,14 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
     with f3:
         sel_surfaces = st.multiselect("Surface", surf_opts, default=surf_opts, key="l_surfaces")
     with f4:
-        top_n = st.slider("Top N", 10, 200, 50, key="l_topn")
+        sort_by = st.selectbox(
+            "Rank by",
+            ["Win rate", "Wins", "L30 WR", "AI accuracy", "Streak"],
+            index=0,
+            key="l_sort",
+        )
+    with f5:
+        top_n = st.slider("Top", 10, 200, 50, key="l_topn")
 
     df = history_df.copy()
     df = df[(df["date"].dt.year >= year_range[0]) & (df["date"].dt.year <= year_range[1])]
@@ -1951,38 +2168,65 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
         st.markdown('<div class="empty-state">No matches in the current selection.</div>', unsafe_allow_html=True)
         return
 
-    wins = df["playerA"].value_counts()
-    losses = df["playerB"].value_counts()
-    lb = pd.DataFrame({"Wins": wins, "Losses": losses}).fillna(0)
-    lb["Matches"] = lb["Wins"] + lb["Losses"]
-    lb["Win rate"] = lb["Wins"] / lb["Matches"].replace(0, np.nan)
-    lb = lb[lb["Matches"] >= int(min_matches)].sort_values(["Win rate", "Wins"], ascending=[False, False])
-    lb = lb.head(int(top_n))
-    lb.index.name = "Player"
-    lb = lb.reset_index()
+    pred_df = load_predictions()
+    pred_window = pred_df.copy()
+    if not pred_window.empty:
+        pred_window = pred_window[(pred_window["date"].dt.year >= year_range[0]) & (pred_window["date"].dt.year <= year_range[1])]
+        if sel_surfaces:
+            pred_window = pred_window[pred_window["surface"].isin(sel_surfaces)]
+
+    lb = _leaderboard_table(df, pred_window, min_matches)
+    if lb.empty:
+        st.markdown('<div class="empty-state">No players meet the minimum match threshold.</div>', unsafe_allow_html=True)
+        return
+
+    # Sort and rank
+    sort_col_map = {
+        "Win rate": "Win rate",
+        "Wins": "Wins",
+        "L30 WR": "L30 WR",
+        "AI accuracy": "AI accuracy",
+        "Streak": "Streak",
+    }
+    sc = sort_col_map[sort_by]
+    lb = lb.sort_values([sc, "Wins"], ascending=[False, False], na_position="last").head(int(top_n))
     lb.insert(0, "Rank", np.arange(1, len(lb) + 1))
-    lb["Win rate"] = lb["Win rate"] * 100
+
+    # Cosmetic: format streak (W3 / L2) for display
+    def _fmt_streak(s):
+        if pd.isna(s):
+            return ""
+        s = int(s)
+        if s == 0:
+            return ""
+        return f"{'W' if s > 0 else 'L'}{abs(s)}"
+
+    lb["Streak"] = lb["Streak"].apply(_fmt_streak)
     for c in ("Wins", "Losses", "Matches"):
         lb[c] = lb[c].astype(int)
     lb["Player"] = lb["Player"].map(display_name)
 
     st.dataframe(
-        lb[["Rank", "Player", "Matches", "Wins", "Losses", "Win rate"]],
+        lb[["Rank", "Player", "Matches", "Wins", "Losses", "Win rate", "L30 WR", "Best surface", "AI accuracy", "Streak"]],
         width="stretch",
         hide_index=True,
         height=560,
         column_config={
             "Rank": st.column_config.NumberColumn("Rank", width="small"),
+            "Player": st.column_config.TextColumn("Player", width="medium"),
             "Wins": st.column_config.NumberColumn("Wins", width="small"),
             "Losses": st.column_config.NumberColumn("Losses", width="small"),
             "Matches": st.column_config.NumberColumn("Matches", width="small"),
             "Win rate": st.column_config.NumberColumn("Win rate", format="%.1f%%"),
+            "L30 WR": st.column_config.NumberColumn("Last 30d WR", format="%.1f%%", help="Win rate over the last 30 days of activity in this window"),
+            "Best surface": st.column_config.TextColumn("Best surface", width="medium"),
+            "AI accuracy": st.column_config.NumberColumn("AI accuracy", format="%.1f%%", help="How often the AI correctly picked the winner of this player's matches"),
+            "Streak": st.column_config.TextColumn("Streak", width="small"),
         },
     )
 
-    # Jump-to-profile dropdown
     st.caption("Open a profile from the leaderboard:")
-    pick = st.selectbox("Player", ["—"] + lb["Player"].tolist(), key="l_jump")
+    pick = st.selectbox("Player", ["—"] + lb["Player"].tolist(), format_func=lambda k: ("—" if k == "—" else player_label(k)), key="l_jump")
     if pick != "—":
         st.button(f"Open profile: {pick}", key="l_open", on_click=navigate_to_player, args=(pick,), width="stretch")
 

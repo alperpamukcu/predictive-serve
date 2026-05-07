@@ -1,0 +1,91 @@
+name: Daily refresh
+
+# Runs every day at 04:00 UTC (around 07:00 in Istanbul, before the app's
+# usual peak window). Also exposed as a manual trigger from the Actions tab.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install xlrd  # tennis-data.uk older .xls files
+
+      - name: Fetch tennis-data.co.uk historical archive
+        run: python -m src.data.fetch_data
+
+      - name: Build feature pipeline
+        run: |
+          python -m src.data.preprocess
+          python -m src.data.cleaning
+          python -m src.features.elo
+          python -m src.features.form
+          python -m src.features.sets || true
+          python -m src.features.build_features
+
+      - name: Train model + score every match
+        run: |
+          python -m src.models.train_best
+          python -m src.models.score_all_matches
+
+      - name: Fetch live upcoming fixtures (API-Tennis)
+        env:
+          API_TENNIS_KEY: ${{ secrets.API_TENNIS_KEY }}
+        if: ${{ env.API_TENNIS_KEY != '' }}
+        run: |
+          python -m src.data.fetch_upcoming_apitennis || true
+          python -m src.data.fetch_odds_apitennis || true
+
+      - name: Sync ATP roster (player metadata cache)
+        env:
+          API_TENNIS_KEY: ${{ secrets.API_TENNIS_KEY }}
+        if: ${{ env.API_TENNIS_KEY != '' }}
+        run: |
+          python -m src.data.fetch_player_roster || true
+
+      - name: Commit refreshed artifacts
+        run: |
+          set -e
+          git config user.name "predictive-serve-bot"
+          git config user.email "predictive-serve-bot@users.noreply.github.com"
+          git add -f \
+            data/processed/all_predictions.csv \
+            data/processed/fixtures_upcoming.csv \
+            data/cache/player_meta.json \
+            models/logreg_final.pkl \
+            models/imputer_final.pkl \
+            models/feature_columns.txt \
+            models/metrics.json \
+            2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(data): daily refresh $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push

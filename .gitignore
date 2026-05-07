@@ -31,19 +31,38 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Data files (büyük dosyalar - opsiyonel, eğer git'e eklemek istemiyorsanız)
-# Keep small examples in git; ignore generated / large artifacts by default.
+# ----------------------------------------------------------------------
+# Data
+# ----------------------------------------------------------------------
+# Big raw archives & intermediate feature files: regenerable, not tracked.
 data/raw/
-data/processed/
-data/cache/
-models/*.pkl
-models/*.joblib
-models/*.onnx
-models/*.pt
+data/processed/*
+data/cache/*
+
+# Live-served artifacts: tracked so the deployed app always has fresh data.
+# (Daily refresh GitHub Action regenerates and commits these.)
+!data/processed/all_predictions.csv
+!data/processed/fixtures_upcoming.csv
+!data/processed/.gitkeep
+!data/cache/player_meta.json
+!data/cache/.gitkeep
 
 # Allow tracked examples / templates
 !data/examples/
 !data/examples/**
+
+# ----------------------------------------------------------------------
+# Models
+# ----------------------------------------------------------------------
+models/*.pkl
+models/*.joblib
+models/*.onnx
+models/*.pt
+# Keep these small artifacts so the deployed app can score on first boot.
+!models/logreg_final.pkl
+!models/imputer_final.pkl
+!models/feature_columns.txt
+!models/metrics.json
 
 # Assets: keep placeholders, ignore downloaded binaries
 assets/players/*
@@ -71,4 +90,3 @@ Thumbs.db
 
 # Presentation visual generation scripts
 create_additional_visuals.py
-
