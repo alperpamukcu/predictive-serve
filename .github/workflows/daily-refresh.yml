@@ -40,10 +40,22 @@ jobs:
       - name: Fetch tennis-data.co.uk historical archive
         run: python -m src.data.fetch_data
 
-      - name: Build feature pipeline
+      - name: Build feature pipeline (history)
         run: |
           python -m src.data.preprocess
           python -m src.data.cleaning
+
+      - name: Supplement with API-Tennis recent results
+        env:
+          API_TENNIS_KEY: ${{ secrets.API_TENNIS_KEY }}
+          RECENT_RESULTS_PAST_DAYS: "21"
+        if: ${{ env.API_TENNIS_KEY != '' }}
+        run: |
+          python -m src.data.fetch_recent_results_apitennis || true
+          python -m src.data.merge_recent_results || true
+
+      - name: Feature engineering
+        run: |
           python -m src.features.elo
           python -m src.features.form
           python -m src.features.sets || true
@@ -78,6 +90,8 @@ jobs:
           git add -f \
             data/processed/all_predictions.csv \
             data/processed/fixtures_upcoming.csv \
+            data/processed/recent_results_apitennis.csv \
+            data/processed/matches_clean.csv \
             data/cache/player_meta.json \
             models/logreg_final.pkl \
             models/imputer_final.pkl \

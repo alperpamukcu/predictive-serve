@@ -7655,5 +7655,18 @@
     "logo_url": "https://api.api-tennis.com/logo-tennis/38798_g-cadenasso.jpg",
     "fetched_at": "2026-05-18T07:59:16.285480Z",
     "not_found": false
+  },
+  "Federer R.": {
+    "name": "Federer R.",
+    "full_name": null,
+    "country": null,
+    "country_code": null,
+    "flag": "🏳️",
+    "birthday": null,
+    "age": null,
+    "player_key": null,
+    "logo_url": null,
+    "fetched_at": "2026-05-18T16:53:06.885800Z",
+    "not_found": true
   }
 }

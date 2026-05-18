@@ -43,6 +43,8 @@ data/cache/*
 # (Daily refresh GitHub Action regenerates and commits these.)
 !data/processed/all_predictions.csv
 !data/processed/fixtures_upcoming.csv
+!data/processed/recent_results_apitennis.csv
+!data/processed/matches_clean.csv
 !data/processed/.gitkeep
 !data/cache/player_meta.json
 !data/cache/.gitkeep

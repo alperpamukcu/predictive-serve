@@ -451,6 +451,20 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
   position: relative;
   box-shadow: 0 0 24px rgba(255, 100, 113, 0.35);
 }
+.live-ticker.live-ticker-quiet {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+}
+.live-ticker.live-ticker-quiet .ticker-label {
+  background: var(--surface-strong);
+  color: var(--muted);
+  box-shadow: none;
+}
+.live-ticker .ticker-quiet-msg {
+  padding: 8px 18px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  display: flex; align-items: center;
+}
 .live-ticker .ticker-track-wrap {
   flex: 1 1 auto; overflow: hidden; position: relative;
 }
@@ -578,6 +592,26 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 .up-card-finished .up-pick-name { color: var(--muted); }
 .up-card-finished .up-pick-conf { color: var(--muted); }
 
+/* Coverage two-up grid */
+.coverage-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; margin-top: 8px;
+}
+@media (max-width: 880px) { .coverage-grid { grid-template-columns: 1fr; } }
+.cov-card {
+  padding: 14px 18px; border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+}
+.cov-card-good { border-left: 3px solid var(--good); }
+.cov-card-bad  { border-left: 3px solid var(--bad); }
+.cov-title {
+  font-size: 0.92rem; font-weight: 700; color: #fff;
+  margin-bottom: 8px; letter-spacing: -0.01em;
+}
+.cov-card ul { margin: 0; padding-left: 18px; color: var(--text); font-size: 0.88rem; line-height: 1.6; }
+.cov-card ul i { color: var(--muted); font-style: italic; }
+
 /* H2H card */
 .h2h-card { padding: 16px 22px; }
 .h2h-title { font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -0.01em; }
@@ -607,41 +641,53 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 
 /* Tournament round cards */
 .round-card {
-  padding: 10px 16px; margin-bottom: 6px;
+  padding: 12px 18px; margin-bottom: 8px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  transition: border-color 0.18s ease, transform 0.18s ease;
 }
-.round-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
+.round-card:hover { border-color: rgba(106,169,255,0.30); transform: translateX(2px); }
+.round-meta {
+  color: var(--muted); font-size: 0.78rem; margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+}
 .round-row {
   display: grid; grid-template-columns: 1fr auto 1fr;
-  align-items: center; gap: 14px;
+  align-items: center; gap: 16px;
 }
-.round-side { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.round-side { display: flex; gap: 12px; align-items: center; min-width: 0; }
 .round-side:last-child { flex-direction: row-reverse; }
-.round-side:last-child .round-name { text-align: right; }
+.round-side:last-child .round-name-wrap { text-align: right; align-items: flex-end; }
 .round-photo > div, .round-photo > img {
-  width: 36px !important; height: 36px !important; border-radius: 50%;
-  border: 1.5px solid var(--line-strong);
+  width: 44px !important; height: 44px !important; border-radius: 50%;
+  border: 2px solid var(--line-strong);
 }
+.round-name-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
 .round-name {
-  color: #fff; font-weight: 600; font-size: 0.92rem;
+  color: #fff; font-weight: 700; font-size: 0.98rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  flex: 1 1 auto; min-width: 0;
 }
+.round-flag { color: var(--muted); font-size: 0.78rem; margin-top: 2px; }
 .round-side-winner .round-name { color: #fff; font-weight: 800; }
+.round-side-winner .round-photo > div,
+.round-side-winner .round-photo > img {
+  border-color: var(--good);
+  box-shadow: 0 0 0 3px rgba(45,210,154,0.15);
+}
 .round-badge-w {
-  display: inline-block; padding: 1px 7px; margin-left: 8px;
-  border-radius: 4px; font-size: 0.65rem; letter-spacing: 0.08em;
+  display: inline-block; padding: 2px 8px; margin-left: 6px;
+  border-radius: 999px; font-size: 0.62rem; letter-spacing: 0.10em;
   background: var(--good-soft); color: #afe9d3; font-weight: 800;
   vertical-align: middle;
 }
 .round-score {
-  padding: 5px 14px; border-radius: 8px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--line);
+  padding: 8px 16px; border-radius: 10px;
+  background: rgba(106,169,255,0.10);
+  border: 1px solid rgba(106,169,255,0.28);
   color: #fff; font-weight: 800; font-variant-numeric: tabular-nums;
-  font-size: 0.92rem; letter-spacing: 0.02em;
+  font-size: 1.0rem; letter-spacing: 0.04em;
+  min-width: 90px; text-align: center;
 }
 
 /* Tournament sub-header inside Upcoming */
@@ -1332,15 +1378,25 @@ def _live_for_player(player: str, livescores: List[Dict[str, Any]]) -> Optional[
 
 
 def render_live_ticker() -> None:
-    """A thin newscaster-style ticker pinned just under the top nav, scrolling
-    the players + score for every match in progress."""
+    """A thin newscaster-style ticker pinned just under the top nav. Renders
+    even when nothing is live so users can tell the feed is wired up."""
     events = cached_livescore()
     singles = [
         ev for ev in events
         if not is_doubles((ev.get("event_first_player") or ""))
         and not is_doubles((ev.get("event_second_player") or ""))
     ]
+
     if not singles:
+        st.markdown(
+            """
+            <div class="live-ticker live-ticker-quiet">
+              <div class="ticker-label">LIVE</div>
+              <div class="ticker-quiet-msg">No matches in progress right now &middot; check Upcoming for the next schedule</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     items_html: list[str] = []
@@ -1370,7 +1426,7 @@ def render_live_ticker() -> None:
     st.markdown(
         f"""
         <div class="live-ticker">
-          <div class="ticker-label">LIVE</div>
+          <div class="ticker-label">LIVE &middot; {len(singles)}</div>
           <div class="ticker-track-wrap"><div class="ticker-track">{items_html_doubled}</div></div>
         </div>
         """,
@@ -1686,6 +1742,64 @@ def render_hero() -> None:
           <h1><span class="grad">Match-level forecasts, end-to-end.</span></h1>
           <p>Historical pipeline 2000-present (67k+ matches), Elo + form + head-to-head features, gradient-boosted model with a held-out 2025 test split, and live ATP fixtures with player photos via API-Tennis.</p>
         </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_coverage() -> None:
+    """A collapsible transparency strip listing what's in / out of the model."""
+    pred_df = load_predictions()
+    n_matches = len(pred_df) if not pred_df.empty else 0
+    latest = (
+        pd.to_datetime(pred_df["date"]).max().date().strftime("%d %b %Y")
+        if not pred_df.empty
+        else "—"
+    )
+    earliest = (
+        pd.to_datetime(pred_df["date"]).min().date().strftime("%d %b %Y")
+        if not pred_df.empty
+        else "—"
+    )
+    info = load_metrics_json()
+    model_label = str(info.get("model", "Model"))
+    api_supp_path = PROCESSED_DIR / "recent_results_apitennis.csv"
+    api_supp_n = 0
+    api_supp_latest = "—"
+    if api_supp_path.exists():
+        try:
+            sup = pd.read_csv(api_supp_path)
+            api_supp_n = len(sup)
+            if api_supp_n:
+                api_supp_latest = pd.to_datetime(sup["date"]).max().strftime("%d %b %Y")
+        except Exception:
+            pass
+
+    st.markdown(
+        f"""
+        <details class="ps-details" style="margin: 0 0 14px 0;">
+          <summary>Data coverage — what the model trains on</summary>
+          <div class="coverage-grid">
+            <div class="cov-card cov-card-good">
+              <div class="cov-title">✓ Included</div>
+              <ul>
+                <li>ATP main-tour singles (Grand Slams, Masters 1000, ATP 500, ATP 250, Tour Finals)</li>
+                <li>Historical archive from tennis-data.co.uk — <b>{n_matches:,}</b> matches, <b>{earliest}</b> → <b>{latest}</b></li>
+                <li>API-Tennis recent results supplement (last 21 days, finished singles) — <b>{api_supp_n}</b> matches up to <b>{api_supp_latest}</b></li>
+                <li>Active model: <b>{h(model_label)}</b> (gradient-boosted, 36 leakage-safe features)</li>
+              </ul>
+            </div>
+            <div class="cov-card cov-card-bad">
+              <div class="cov-title">✕ Excluded</div>
+              <ul>
+                <li>Challenger / ITF / Futures circuits</li>
+                <li>WTA matches (men's tour only for now)</li>
+                <li>Doubles, mixed doubles, wheelchair, junior, exhibition</li>
+                <li>Bookmaker odds <i>(used for reference only — kept out of features so the "edge" stays meaningful)</i></li>
+              </ul>
+            </div>
+          </div>
+        </details>
         """,
         unsafe_allow_html=True,
     )
@@ -2659,13 +2773,24 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
             f"<span class='count'>{len(chunk)} match{'es' if len(chunk) != 1 else ''}</span></div>",
             unsafe_allow_html=True,
         )
+        cache = _load_player_cache()
         for i, (_, m) in enumerate(chunk.iterrows()):
-            winner = display_name(str(m["playerA"]))
-            loser = display_name(str(m["playerB"]))
+            pa = str(m["playerA"])
+            pb = str(m["playerB"])
+            winner = display_name(pa)
+            loser = display_name(pb)
             score = str(m.get("score") or "")
             date_s = fmt_date_long(m["date"])
-            img_w = player_image_html(str(m["playerA"]), size=44)
-            img_l = player_image_html(str(m["playerB"]), size=44)
+            img_w = player_image_html(pa, size=44)
+            img_l = player_image_html(pb, size=44)
+            meta_w = cache.get(resolve_to_history_name(pa))
+            meta_l = cache.get(resolve_to_history_name(pb))
+            flag_w = (meta_w.flag if meta_w and meta_w.flag and meta_w.flag != "🏳️" else "")
+            flag_l = (meta_l.flag if meta_l and meta_l.flag and meta_l.flag != "🏳️" else "")
+            country_w = (meta_w.country if meta_w and meta_w.country else "")
+            country_l = (meta_l.country if meta_l and meta_l.country else "")
+            sub_w = f"{flag_w} {h(country_w)}" if country_w else "&nbsp;"
+            sub_l = f"{flag_l} {h(country_l)}" if country_l else "&nbsp;"
             st.markdown(
                 f"""
                 <div class="round-card">
@@ -2673,11 +2798,17 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
                   <div class="round-row">
                     <div class="round-side round-side-winner">
                       <div class="round-photo">{img_w}</div>
-                      <div class="round-name">{h(winner)} <span class="round-badge-w">WIN</span></div>
+                      <div class="round-name-wrap">
+                        <div class="round-name">{h(winner)} <span class="round-badge-w">WIN</span></div>
+                        <div class="round-flag">{sub_w}</div>
+                      </div>
                     </div>
                     <div class="round-score">{h(score) or '—'}</div>
                     <div class="round-side">
-                      <div class="round-name">{h(loser)}</div>
+                      <div class="round-name-wrap">
+                        <div class="round-name">{h(loser)}</div>
+                        <div class="round-flag">{sub_l}</div>
+                      </div>
                       <div class="round-photo">{img_l}</div>
                     </div>
                   </div>
@@ -3033,6 +3164,7 @@ _init_state()
 render_nav()
 render_live_ticker()
 render_hero()
+render_coverage()
 
 pred_df = load_predictions()
 history_df = load_history()
