@@ -1,11 +1,13 @@
 pandas
 requests
 openpyxl
+xlrd>=2.0
 scikit-learn
+lightgbm>=4.0
 joblib
 streamlit
 matplotlib
 seaborn
 numpy
+scipy
 python-dotenv
-xlrd>=2.0

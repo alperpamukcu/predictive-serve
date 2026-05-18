@@ -109,6 +109,66 @@ def add_h2h_features(df: pd.DataFrame) -> pd.DataFrame:
     df["h2h_winrateA"] = np.where(h2h_matches_before > 0, h2h_winrateA, np.nan)
     df["h2h_winrateB"] = np.where(h2h_matches_before > 0, h2h_winrateB, np.nan)
 
+    # ------------------------------------------------------------------
+    # Surface-aware H2H (Phase 1.1 model improvement)
+    # Same logic as the global counter, but keyed on (small, big, surface)
+    # so hard-court Federer vs Nadal is tracked separately from clay.
+    # ------------------------------------------------------------------
+    h2h_surf_matches = np.zeros(n, dtype=np.int32)
+    h2h_surf_winsA_ = np.zeros(n, dtype=np.int32)
+    h2h_surf_winsB_ = np.zeros(n, dtype=np.int32)
+    h2h_surf_stats: Dict[Tuple[str, str, str], Tuple[int, int]] = {}
+    surfaces = df["surface"].astype(str).str.strip().fillna("Unknown").values
+
+    for i in range(n):
+        a = playersA[i]
+        b = playersB[i]
+        surface = surfaces[i] or "Unknown"
+
+        if a <= b:
+            key = (a, b, surface)
+            a_is_small = True
+        else:
+            key = (b, a, surface)
+            a_is_small = False
+
+        total, wins_small = h2h_surf_stats.get(key, (0, 0))
+        h2h_surf_matches[i] = total
+        if total > 0:
+            if a_is_small:
+                winsA = wins_small
+            else:
+                winsA = total - wins_small
+            winsB = total - winsA
+        else:
+            winsA = 0
+            winsB = 0
+        h2h_surf_winsA_[i] = winsA
+        h2h_surf_winsB_[i] = winsB
+
+        # Update — playerA is the winner in matches_clean schema
+        total_new = total + 1
+        wins_small_new = wins_small + 1 if a_is_small else wins_small
+        h2h_surf_stats[key] = (total_new, wins_small_new)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        h2h_surf_winrateA = np.divide(
+            h2h_surf_winsA_,
+            h2h_surf_matches,
+            out=np.zeros_like(h2h_surf_winsA_, dtype=float),
+            where=h2h_surf_matches > 0,
+        )
+        h2h_surf_winrateB = np.divide(
+            h2h_surf_winsB_,
+            h2h_surf_matches,
+            out=np.zeros_like(h2h_surf_winsB_, dtype=float),
+            where=h2h_surf_matches > 0,
+        )
+
+    df["h2h_surface_matches"] = h2h_surf_matches
+    df["h2h_surface_winrateA"] = np.where(h2h_surf_matches > 0, h2h_surf_winrateA, np.nan)
+    df["h2h_surface_winrateB"] = np.where(h2h_surf_matches > 0, h2h_surf_winrateB, np.nan)
+
     return df
 
 
@@ -254,6 +314,8 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("oddsA", "oddsB"),
         # H2H winrate kolonlarını da swap et
         ("h2h_winrateA", "h2h_winrateB"),
+        # Surface-aware H2H (Phase 1.1)
+        ("h2h_surface_winrateA", "h2h_surface_winrateB"),
         # Set winrate kolonlarını da swap et
         ("set_winrate_overallA", "set_winrate_overallB"),
         ("set_winrate_bo3A", "set_winrate_bo3B"),
@@ -360,6 +422,10 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     if "h2h_winrateA" in df.columns and "h2h_winrateB" in df.columns:
         df["h2h_winrate_diff"] = df["h2h_winrateA"] - df["h2h_winrateB"]
 
+    # Surface H2H winrate farkı
+    if "h2h_surface_winrateA" in df.columns and "h2h_surface_winrateB" in df.columns:
+        df["h2h_surface_winrate_diff"] = df["h2h_surface_winrateA"] - df["h2h_surface_winrateB"]
+
     # Set winrate farkları
     if "set_winrate_overallA" in df.columns and "set_winrate_overallB" in df.columns:
         df["set_winrate_overall_diff"] = df["set_winrate_overallA"] - df["set_winrate_overallB"]
@@ -432,6 +498,8 @@ def build_feature_dataset(
         "rankA", "rankB", "rank_diff",
         # H2H
         "h2h_matches", "h2h_winrateA", "h2h_winrateB", "h2h_winrate_diff",
+        # Surface-aware H2H (Phase 1.1)
+        "h2h_surface_matches", "h2h_surface_winrateA", "h2h_surface_winrateB", "h2h_surface_winrate_diff",
         # Round
         "round_importance", "is_final", "is_semi", "is_quarter",
         # Turnuva seviyesi

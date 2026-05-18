@@ -23,6 +23,10 @@ h2h_matches
 h2h_winrateA
 h2h_winrateB
 h2h_winrate_diff
+h2h_surface_matches
+h2h_surface_winrateA
+h2h_surface_winrateB
+h2h_surface_winrate_diff
 round_importance
 is_final
 is_semi

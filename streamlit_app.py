@@ -588,9 +588,22 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
   border: 1px solid rgba(45,210,154,0.30);
   margin-left: 4px;
 }
-.up-card-finished { opacity: 0.86; }
+.up-card-finished { opacity: 0.94; }
 .up-card-finished .up-pick-name { color: var(--muted); }
 .up-card-finished .up-pick-conf { color: var(--muted); }
+.round-winner-photo > div, .round-winner-photo > img {
+  border-color: var(--good) !important;
+  box-shadow: 0 0 0 3px rgba(45,210,154,0.18) !important;
+}
+
+/* Top-right About button */
+.ps-about-wrap { display:flex; align-items:center; height: 100%; padding-top: 14px; }
+.ps-about-wrap .stButton > button {
+  background: linear-gradient(180deg, rgba(106,169,255,0.18), rgba(106,169,255,0.06)) !important;
+  border-color: rgba(106,169,255,0.40) !important;
+  color: #fff !important;
+  white-space: nowrap !important;
+}
 
 /* Coverage two-up grid */
 .coverage-grid {
@@ -1408,16 +1421,16 @@ def render_live_ticker() -> None:
             continue
         a_disp = display_name(a)
         b_disp = display_name(b)
-        a_img = player_image_html(a, size=36)
-        b_img = player_image_html(b, size=36)
+        a_img = ticker_photo_html(a, size=36)
+        b_img = ticker_photo_html(b, size=36)
         items_html.append(
             f'<div class="ticker-item">'
             f'<span class="dot-live"></span>'
-            f'<span class="ticker-photo">{a_img}</span>'
+            f'{a_img}'
             f'<span class="ticker-name">{h(a_disp)}</span>'
             f'<span class="ticker-score">{h(score) or "-"}</span>'
             f'<span class="ticker-name">{h(b_disp)}</span>'
-            f'<span class="ticker-photo">{b_img}</span>'
+            f'{b_img}'
             f'</div>'
         )
     if not items_html:
@@ -1622,6 +1635,34 @@ def _render_upcoming_for_player(player: str, history_df: pd.DataFrame) -> None:
         )
 
 
+def ticker_photo_html(name: str, size: int = 36) -> str:
+    """Compact photo tile for the live ticker.
+
+    Uses an inline <img> with explicit box-sizing so the ticker's small
+    photos never end up squashed even when the underlying file has an
+    unusual aspect ratio."""
+    history_name = resolve_to_history_name(name)
+    p = ASSETS_DIR / "players" / slugify(history_name)
+    img = find_image(p)
+    src = None
+    if img and img.exists():
+        try:
+            data = base64.b64encode(img.read_bytes()).decode()
+            ext = img.suffix.lower().lstrip(".")
+            mime = "jpeg" if ext == "jpg" else ext
+            src = f"data:image/{mime};base64,{data}"
+        except Exception:
+            src = None
+    if src is None:
+        src = svg_avatar_data_uri(name, size)
+    return (
+        f'<img src="{src}" alt="" '
+        f'style="width:{size}px;height:{size}px;border-radius:50%;'
+        f'border:1px solid rgba(255,255,255,0.18);box-sizing:border-box;'
+        f'object-fit:cover;display:block;"/>'
+    )
+
+
 def player_image_html(name: str, size: int = 120) -> str:
     """Return an inline <img> tag — local cache first, otherwise SVG avatar."""
     history_name = resolve_to_history_name(name)
@@ -1713,6 +1754,103 @@ def all_tournaments(df: pd.DataFrame) -> List[str]:
     return sorted(s.unique().tolist())
 
 
+def _render_about_dialog() -> None:
+    """Decorator-style dialog that fires when the top-right button is clicked.
+    Uses st.dialog when available (1.31+); falls back to an expander."""
+    info = load_metrics_json()
+    model_label = str(info.get("model", "Model"))
+    val = info.get("validation") or {}
+    test = info.get("test") or {}
+    blend = info.get("blend") or {}
+    pred_df = load_predictions()
+    n_matches = len(pred_df) if not pred_df.empty else 0
+    earliest = pd.to_datetime(pred_df["date"]).min().date() if not pred_df.empty else None
+    latest = pd.to_datetime(pred_df["date"]).max().date() if not pred_df.empty else None
+    api_supp = PROCESSED_DIR / "recent_results_apitennis.csv"
+    api_n = 0
+    if api_supp.exists():
+        try:
+            api_n = len(pd.read_csv(api_supp))
+        except Exception:
+            api_n = 0
+
+    val_acc = val.get("accuracy")
+    val_ll = val.get("logloss")
+    test_acc = test.get("accuracy")
+    blend_acc = (blend.get("val") or {}).get("blend", {}).get("accuracy")
+    alpha = blend.get("alpha")
+
+    def _md(value, n=2):
+        return "—" if value is None else f"{value*100:.{n}f}%"
+
+    st.markdown(
+        f"""
+        ### About Predictive Serve
+
+        **Predictive Serve** is a transparent, end-to-end tennis match
+        forecasting console. Everything below is wired up in this app —
+        nothing is mocked.
+
+        #### What you're looking at
+        - **Matches** — every historical match scored with the AI's
+          probability + a green/red row tint showing whether the AI was
+          right.
+        - **Upcoming** — live fixtures grouped by tournament with
+          probability bars, **LIVE** badges, and **FINAL** cards when
+          today's matches end.
+        - **Live ticker** — a strip at the top of the page scrolling the
+          current set scores of every match in progress.
+        - **Players / Tournaments** — per-entity profiles with photos,
+          flags, full names, Elo trajectory and round breakdowns.
+        - **What-if** — pick any two players + surface + date and the
+          model returns the probability split, with a **head-to-head**
+          card underneath when both players have API metadata.
+        - **Leaderboard** — ranked by Win rate / Last 30d / AI accuracy /
+          Streak, with country flag + full name + photo.
+
+        #### Data sources
+        - **tennis-data.co.uk** — canonical historical archive
+          (2000 → today), refreshed nightly. Currently
+          **{n_matches:,} matches** from **{earliest}** to **{latest}**.
+        - **api-tennis.com** — last 21 days of finished singles matches
+          merged into the history each night
+          (currently **{api_n}** supplemented matches). Same endpoint
+          also drives the live ticker, upcoming fixtures, player photos,
+          country flags and ATP rankings.
+
+        #### Model
+        - **Active**: **{h(model_label)}** — a calibrated
+          gradient-boosted tree (HistGradientBoosting / LightGBM
+          candidates evaluated against a held-out 2025 test split).
+        - **Features (40 total)**: global + surface Elo, last-5/10-match
+          form, head-to-head **including surface-specific H2H**,
+          rest days, workload, rank, round importance, tournament tier,
+          set-level win rate. Bookmaker odds are **never** features
+          ("edge" stays meaningful).
+        - **Market-prior blend**: at inference time we mix
+          α·p\\_model + (1-α)·p\\_market when an odds line exists.
+          Current α from validation: **{0 if alpha is None else alpha:.2f}**
+          (lower means "trust the market more on matches with lines").
+        - **Metrics today**:
+          - Pure AI val accuracy: **{_md(val_acc)}** (log loss
+            **{(val_ll if val_ll is not None else 0):.3f}**)
+          - Pure AI 2025 test accuracy: **{_md(test_acc)}**
+          - Market-blend val accuracy (where odds exist):
+            **{_md(blend_acc)}**
+
+        #### Engineering
+        - All artifacts (predictions CSV, model PKL, player metadata,
+          photos) are regenerated by a **daily GitHub Actions cron** at
+          04:00 UTC and committed to the repo, so the deployed app is
+          always fresh without manual steps.
+        - **No data leakage by construction**: feature_utils.py owns
+          the single `LEAKY_MARKET_COLS` allowlist and `select_model_features`
+          enforces it in every training and scoring path.
+        """,
+        unsafe_allow_html=False,
+    )
+
+
 def render_nav() -> None:
     info = load_metrics_json()
     model_label = str(info.get("model", "Model"))
@@ -1720,18 +1858,44 @@ def render_nav() -> None:
     pill = "Live model"
     if isinstance(val.get("logloss"), (int, float)) and isinstance(val.get("accuracy"), (int, float)):
         pill = f"{model_label} | acc {val['accuracy']*100:.1f}% | log loss {val['logloss']:.3f}"
-    st.markdown(
-        f"""
-        <div class="ps-nav">
-          <div class="ps-nav-left">
-            <div class="ps-logo">PS</div>
-            <div class="ps-brand">Predictive Serve<small>Tennis forecasting console</small></div>
-          </div>
-          <span class="ps-pill"><span class="dot"></span>{h(pill)}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+    nav_l, nav_r = st.columns([8, 1])
+    with nav_l:
+        st.markdown(
+            f"""
+            <div class="ps-nav">
+              <div class="ps-nav-left">
+                <div class="ps-logo">PS</div>
+                <div class="ps-brand">Predictive Serve<small>Tennis forecasting console</small></div>
+              </div>
+              <span class="ps-pill"><span class="dot"></span>{h(pill)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with nav_r:
+        st.markdown('<div class="ps-about-wrap">', unsafe_allow_html=True)
+        if st.button("ℹ️ About", key="about_btn", width="stretch", help="Data sources, model and engineering details"):
+            st.session_state["_show_about"] = True
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if st.session_state.get("_show_about"):
+        try:
+            # st.dialog is decorator-based and shows a real modal in 1.31+
+            @st.dialog("About Predictive Serve", width="large")
+            def _show():
+                _render_about_dialog()
+                if st.button("Close", key="about_close"):
+                    st.session_state["_show_about"] = False
+                    st.rerun()
+            _show()
+        except Exception:
+            # Older Streamlit: fall back to an inline expander
+            with st.expander("About Predictive Serve", expanded=True):
+                _render_about_dialog()
+                if st.button("Close", key="about_close_inline"):
+                    st.session_state["_show_about"] = False
+                    st.rerun()
 
 
 def render_hero() -> None:
@@ -2045,7 +2209,7 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
         st.markdown('<div class="empty-state">No matches match the current filters.</div>', unsafe_allow_html=True)
         return
 
-    df = df.sort_values("date", ascending=False).head(500)
+    df = df.sort_values("date", ascending=False).head(500).reset_index(drop=True)
     actual_winner = (
         np.where(df["y"].astype("Int64").fillna(-1).astype(int) == 1, df["playerA"], df["playerB"])
         if "y" in df.columns
@@ -2053,8 +2217,10 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
     )
     correct_mask = (df["winner_pick"].values == actual_winner) if actual_winner is not None else None
 
+    # Keep the underlying date as a proper datetime so the Date column sorts
+    # chronologically (a text "1 May 2026" sorts before "10 April 2026").
     show = pd.DataFrame({
-        "Date": df["date"].map(fmt_date_long),
+        "Date": df["date"].dt.date,
         "Surface": df["surface"],
         "Player A": df["playerA"].map(display_name),
         "Player B": df["playerB"].map(display_name),
@@ -2065,13 +2231,19 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
         show["Actual Winner"] = pd.Series(actual_winner, index=df.index).map(display_name)
         show["Result"] = np.where(correct_mask, "✓", "✗")
 
+    column_config = {
+        "Date": st.column_config.DateColumn("Date", format="DD MMMM YYYY", width="medium"),
+        "Confidence": st.column_config.NumberColumn("Confidence", format="%.1f%%"),
+    }
+
     if correct_mask is not None:
         styled = _style_correct_rows(show, correct_mask).format({"Confidence": "{:.1f}%"})
         st.dataframe(
             styled,
             width="stretch",
-            hide_index=False,
+            hide_index=True,
             height=520,
+            column_config=column_config,
         )
     else:
         st.dataframe(
@@ -2079,7 +2251,7 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
             width="stretch",
             hide_index=True,
             height=520,
-            column_config={"Confidence": st.column_config.NumberColumn("Confidence", format="%.1f%%")},
+            column_config=column_config,
         )
 
     # Quick navigation: pick a row from the underlying df via select widgets
@@ -2781,35 +2953,41 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
             loser = display_name(pb)
             score = str(m.get("score") or "")
             date_s = fmt_date_long(m["date"])
-            img_w = player_image_html(pa, size=44)
-            img_l = player_image_html(pb, size=44)
+            img_w = player_image_html(pa, size=72)
+            img_l = player_image_html(pb, size=72)
             meta_w = cache.get(resolve_to_history_name(pa))
             meta_l = cache.get(resolve_to_history_name(pb))
             flag_w = (meta_w.flag if meta_w and meta_w.flag and meta_w.flag != "🏳️" else "")
             flag_l = (meta_l.flag if meta_l and meta_l.flag and meta_l.flag != "🏳️" else "")
             country_w = (meta_w.country if meta_w and meta_w.country else "")
             country_l = (meta_l.country if meta_l and meta_l.country else "")
-            sub_w = f"{flag_w} {h(country_w)}" if country_w else "&nbsp;"
-            sub_l = f"{flag_l} {h(country_l)}" if country_l else "&nbsp;"
+            sub_w = f"{flag_w}&nbsp;{h(country_w)}" if country_w else ""
+            sub_l = f"{flag_l}&nbsp;{h(country_l)}" if country_l else ""
             st.markdown(
                 f"""
-                <div class="round-card">
-                  <div class="round-meta">{h(date_s)}</div>
-                  <div class="round-row">
-                    <div class="round-side round-side-winner">
-                      <div class="round-photo">{img_w}</div>
-                      <div class="round-name-wrap">
-                        <div class="round-name">{h(winner)} <span class="round-badge-w">WIN</span></div>
-                        <div class="round-flag">{sub_w}</div>
+                <div class="up-card up-card-finished" style="border-left:3px solid var(--good);">
+                  <div class="up-meta">
+                    <span class="fin-pill-card">FINAL</span>
+                    <span class="up-time">{h(date_s)}</span>
+                  </div>
+                  <div class="up-row">
+                    <div class="up-side">
+                      <div class="up-photo round-winner-photo">{img_w}</div>
+                      <div class="up-info">
+                        <div class="up-name">{h(winner)} <span class="round-badge-w">WIN</span></div>
+                        <div class="up-prob" style="color:var(--muted);">{sub_w or '&nbsp;'}</div>
                       </div>
                     </div>
-                    <div class="round-score">{h(score) or '—'}</div>
-                    <div class="round-side">
-                      <div class="round-name-wrap">
-                        <div class="round-name">{h(loser)}</div>
-                        <div class="round-flag">{sub_l}</div>
+                    <div class="up-pick">
+                      <div class="up-pick-label">FINAL SCORE</div>
+                      <div class="up-pick-name" style="font-size:1.35rem;">{h(score) or '—'}</div>
+                    </div>
+                    <div class="up-side up-side-right">
+                      <div class="up-info up-info-right">
+                        <div class="up-name">{h(loser)}</div>
+                        <div class="up-prob" style="color:var(--muted);">{sub_l or '&nbsp;'}</div>
                       </div>
-                      <div class="round-photo">{img_l}</div>
+                      <div class="up-photo">{img_l}</div>
                     </div>
                   </div>
                 </div>

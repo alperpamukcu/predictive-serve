@@ -34,6 +34,12 @@ from sklearn.preprocessing import StandardScaler
 from src.utils.config import MODELS_DIR, PROCESSED_DIR
 from src.utils.feature_utils import select_model_features
 
+try:
+    import lightgbm as lgb  # type: ignore
+    _LGB_AVAILABLE = True
+except Exception:
+    _LGB_AVAILABLE = False
+
 TRAIN_DATA_PATH = PROCESSED_DIR / "train_dataset.csv"
 METRICS_PATH = MODELS_DIR / "metrics.json"
 
@@ -187,6 +193,36 @@ def train_and_select() -> Tuple[Path, Path, Path]:
     assert best_hgb is not None and best_hgb_metrics is not None
     print(f"[best] HGB val={best_hgb_metrics.asdict()}")
     candidates.append(("HGB", best_hgb, best_hgb_metrics))
+
+    # 3) LightGBM (Phase 2.1). A small grid; usually +0.3-0.5pp over HGB
+    # and 2-3x faster training.
+    if _LGB_AVAILABLE:
+        lgb_grid = [
+            dict(n_estimators=400, learning_rate=0.05, num_leaves=31, max_depth=-1,
+                 min_child_samples=50, reg_lambda=0.0),
+            dict(n_estimators=600, learning_rate=0.03, num_leaves=31, max_depth=-1,
+                 min_child_samples=50, reg_lambda=0.0),
+            dict(n_estimators=400, learning_rate=0.05, num_leaves=63, max_depth=-1,
+                 min_child_samples=50, reg_lambda=0.1),
+            dict(n_estimators=600, learning_rate=0.03, num_leaves=63, max_depth=-1,
+                 min_child_samples=100, reg_lambda=0.1),
+        ]
+        best_lgb = None
+        best_lgb_metrics: Optional[Metrics] = None
+        for params in lgb_grid:
+            mdl = lgb.LGBMClassifier(
+                **params, n_jobs=-1, random_state=42, verbose=-1
+            )
+            mdl.fit(X_tr, y_tr)
+            m = _eval(y_va, mdl.predict_proba(X_va)[:, 1])
+            if best_lgb_metrics is None or m.logloss < best_lgb_metrics.logloss:
+                best_lgb = mdl
+                best_lgb_metrics = m
+        if best_lgb is not None and best_lgb_metrics is not None:
+            print(f"[best] LightGBM val={best_lgb_metrics.asdict()}")
+            candidates.append(("LightGBM", best_lgb, best_lgb_metrics))
+    else:
+        print("[best] LightGBM not installed — skipping that candidate.")
 
     # Pick the best on validation log-loss
     best_name, best_model, best_metrics = min(candidates, key=lambda c: c[2].logloss)
