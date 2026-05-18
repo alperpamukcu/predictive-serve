@@ -144,6 +144,21 @@ def get_livescore(cfg: ApiTennisConfig) -> List[Dict[str, Any]]:
     return res if isinstance(res, list) else []
 
 
+def get_h2h(cfg: ApiTennisConfig, first_player_key: int | str, second_player_key: int | str) -> Dict[str, Any]:
+    """Head-to-head record between two players. The payload contains
+    ``H2H`` (the list of meetings) and per-player win counts."""
+    payload = _get(
+        cfg,
+        {
+            "method": "get_H2H",
+            "first_player_key": str(first_player_key),
+            "second_player_key": str(second_player_key),
+        },
+    )
+    res = payload.get("result") or {}
+    return res if isinstance(res, dict) else {}
+
+
 def consensus_decimal_moneyline(odds_payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], int]:
     """
     Extract a consensus (median) Home/Away decimal price across books.

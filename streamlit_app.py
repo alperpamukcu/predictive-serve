@@ -60,6 +60,7 @@ try:
     from src.integrations.api_tennis import (  # type: ignore
         ApiTennisConfig,
         get_fixtures,
+        get_h2h,
         get_livescore,
         get_players,
         get_standings,
@@ -67,6 +68,7 @@ try:
 except Exception:  # pragma: no cover
     ApiTennisConfig = None  # type: ignore
     get_fixtures = None  # type: ignore
+    get_h2h = None  # type: ignore
     get_livescore = None  # type: ignore
     get_players = None  # type: ignore
     get_standings = None  # type: ignore
@@ -453,10 +455,11 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
   flex: 1 1 auto; overflow: hidden; position: relative;
 }
 .live-ticker .ticker-track {
-  display: inline-flex; gap: 28px; padding: 8px 16px; align-items: center;
+  display: inline-flex; gap: 36px; padding: 10px 18px; align-items: center;
   white-space: nowrap;
-  animation: ps-ticker 60s linear infinite;
+  animation: ps-ticker 180s linear infinite;
 }
+.live-ticker:hover .ticker-track { animation-play-state: paused; }
 @keyframes ps-ticker {
   from { transform: translateX(0); }
   to   { transform: translateX(-50%); }
@@ -466,9 +469,12 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
   font-size: 0.92rem; color: var(--text);
 }
 .ticker-item .ticker-photo > div, .ticker-item .ticker-photo > img {
-  width: 28px !important; height: 28px !important; border-radius: 50%;
+  width: 36px !important; height: 36px !important; border-radius: 50%;
   border: 1px solid var(--line-strong);
+  overflow: hidden;
 }
+.ticker-item .ticker-photo > div img,
+.ticker-item .ticker-photo img { width: 36px !important; height: 36px !important; object-fit: cover; }
 .ticker-item .ticker-name { font-weight: 700; color: #fff; }
 .ticker-item .ticker-score {
   padding: 2px 10px; border-radius: 6px; font-weight: 800;
@@ -535,13 +541,121 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 .streak-good { color: var(--good) !important; }
 .streak-bad { color: var(--bad) !important; }
 
-/* LIVE pill on individual upcoming cards */
+/* LIVE / FINAL pills on individual upcoming cards */
 .live-pill-card {
   display: inline-block; padding: 3px 10px; border-radius: 999px;
   background: var(--bad); color: #fff; font-size: 0.72rem; font-weight: 800;
   letter-spacing: 0.10em;
   margin-right: 8px;
   box-shadow: 0 0 14px rgba(255,100,113,0.45);
+  animation: ps-pulse 1.6s ease-in-out infinite;
+}
+.fin-pill-card {
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: 0.72rem; font-weight: 800; letter-spacing: 0.10em;
+  margin-right: 8px; border: 1px solid var(--line-strong);
+}
+.up-time {
+  font-weight: 700; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.up-score {
+  display: inline-block; padding: 3px 10px; border-radius: 6px;
+  background: rgba(106,169,255,0.12); color: #fff;
+  font-weight: 800; font-size: 0.85rem; margin-right: 8px;
+  border: 1px solid rgba(106,169,255,0.25);
+  font-variant-numeric: tabular-nums;
+}
+.up-actual {
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  background: var(--good-soft); color: #afe9d3;
+  font-weight: 600; font-size: 0.78rem;
+  border: 1px solid rgba(45,210,154,0.30);
+  margin-left: 4px;
+}
+.up-card-finished { opacity: 0.86; }
+.up-card-finished .up-pick-name { color: var(--muted); }
+.up-card-finished .up-pick-conf { color: var(--muted); }
+
+/* H2H card */
+.h2h-card { padding: 16px 22px; }
+.h2h-title { font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -0.01em; }
+.h2h-row { display: grid; grid-template-columns: 1.2fr 2fr 1.2fr; align-items: center; gap: 18px; }
+.h2h-side { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.h2h-side-right { flex-direction: row-reverse; }
+.h2h-photo > div, .h2h-photo > img {
+  width: 48px !important; height: 48px !important; border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+.h2h-name {
+  color: #fff; font-weight: 700; font-size: 0.92rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto;
+}
+.h2h-side-right .h2h-name { text-align: right; }
+.h2h-wins {
+  font-size: 1.5rem; font-weight: 800; color: #fff;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+.h2h-bar {
+  display: flex; height: 14px; border-radius: 7px; overflow: hidden;
+  border: 1px solid var(--line);
+}
+.h2h-bar-a { background: linear-gradient(90deg, #ff7059, #ffb27a); }
+.h2h-bar-b { background: linear-gradient(90deg, #6aa9ff, #9c87ff); }
+
+/* Tournament round cards */
+.round-card {
+  padding: 10px 16px; margin-bottom: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+}
+.round-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
+.round-row {
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center; gap: 14px;
+}
+.round-side { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.round-side:last-child { flex-direction: row-reverse; }
+.round-side:last-child .round-name { text-align: right; }
+.round-photo > div, .round-photo > img {
+  width: 36px !important; height: 36px !important; border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+}
+.round-name {
+  color: #fff; font-weight: 600; font-size: 0.92rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1 1 auto; min-width: 0;
+}
+.round-side-winner .round-name { color: #fff; font-weight: 800; }
+.round-badge-w {
+  display: inline-block; padding: 1px 7px; margin-left: 8px;
+  border-radius: 4px; font-size: 0.65rem; letter-spacing: 0.08em;
+  background: var(--good-soft); color: #afe9d3; font-weight: 800;
+  vertical-align: middle;
+}
+.round-score {
+  padding: 5px 14px; border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--line);
+  color: #fff; font-weight: 800; font-variant-numeric: tabular-nums;
+  font-size: 0.92rem; letter-spacing: 0.02em;
+}
+
+/* Tournament sub-header inside Upcoming */
+.tour-subheader {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 14px; margin: 4px 0 6px 0;
+  border-radius: 8px;
+  background: rgba(106,169,255,0.06);
+  border-left: 3px solid var(--accent);
+  color: #fff;
+  font-weight: 700; font-size: 0.95rem; letter-spacing: -0.01em;
+}
+.tour-subheader .count {
+  color: var(--muted); font-weight: 500; font-size: 0.82rem;
 }
 
 /* Player profile header */
@@ -922,11 +1036,38 @@ def get_player_meta(name: str) -> PlayerMeta:
     return meta
 
 
-def display_name(name: str) -> str:
-    """Use the API-Tennis full_name (e.g. ``Jannik Sinner``) when cached,
-    falling back to the history short form (``Sinner J.``)."""
+@st.cache_data(show_spinner=False, ttl=120)
+def _canonical_to_history_index() -> Dict[Tuple[Optional[str], str], str]:
+    """Index canonical key -> the history-style spelling we already have
+    metadata for, so live-API names ('R. Bautista-Agut') can be mapped
+    onto the slug we used to cache the photo ('bautista-agut-r')."""
     cache = _load_player_cache()
-    meta = cache.get(name)
+    out: Dict[Tuple[Optional[str], str], str] = {}
+    for cached_name in cache:
+        key = canonical_parts(cached_name)
+        if key[1]:
+            out.setdefault(key, cached_name)
+    return out
+
+
+def resolve_to_history_name(name: str) -> str:
+    """Map any incoming name (history or API format) to the history-format
+    we cached metadata under. Falls back to the input when unknown."""
+    cache = _load_player_cache()
+    if name in cache:
+        return name
+    key = canonical_parts(name)
+    if not key[1]:
+        return name
+    return _canonical_to_history_index().get(key, name)
+
+
+def display_name(name: str) -> str:
+    """Use the API-Tennis full_name (e.g. ``Jannik Sinner``) when cached
+    under any equivalent spelling, falling back to the input."""
+    history_name = resolve_to_history_name(name)
+    cache = _load_player_cache()
+    meta = cache.get(history_name)
     if meta and meta.full_name:
         return meta.full_name
     return name
@@ -1091,6 +1232,93 @@ def cached_livescore() -> List[Dict[str, Any]]:
         return []
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_h2h(player_a_key: int, player_b_key: int) -> Dict[str, Any]:
+    if get_h2h is None or ApiTennisConfig is None:
+        return {}
+    key = _api_key()
+    if not key:
+        return {}
+    cfg = ApiTennisConfig(api_key=key, cache_ttl_s=86400)
+    try:
+        return get_h2h(cfg, player_a_key, player_b_key)
+    except Exception:
+        return {}
+
+
+def render_h2h(player_a: str, player_b: str) -> None:
+    """Render a compact head-to-head panel if both players have API keys
+    in the metadata cache."""
+    meta_a = get_player_meta(player_a)
+    meta_b = get_player_meta(player_b)
+    if not (meta_a and meta_a.player_key and meta_b and meta_b.player_key):
+        return
+    payload = cached_h2h(int(meta_a.player_key), int(meta_b.player_key))
+    if not payload:
+        return
+    matches = payload.get("H2H") or []
+    if not isinstance(matches, list) or not matches:
+        return
+
+    # Count wins per player_key
+    wins_a = wins_b = 0
+    for m in matches:
+        winner = (m.get("event_winner") or "").lower()
+        first = m.get("event_first_player")
+        # API picks "First Player" or "Second Player"; we know each row's
+        # first_player_key, so map it back to our local A/B.
+        first_key = m.get("first_player_key")
+        if first_key is None:
+            continue
+        is_first_a = int(first_key) == int(meta_a.player_key)
+        if "first" in winner:
+            if is_first_a:
+                wins_a += 1
+            else:
+                wins_b += 1
+        elif "second" in winner:
+            if is_first_a:
+                wins_b += 1
+            else:
+                wins_a += 1
+
+    total = wins_a + wins_b
+    if total == 0:
+        return
+    pct_a = wins_a / total * 100
+    pct_b = 100 - pct_a
+
+    name_a = display_name(player_a)
+    name_b = display_name(player_b)
+    img_a = player_image_html(player_a, size=48)
+    img_b = player_image_html(player_b, size=48)
+
+    st.markdown(
+        f"""
+        <div class="ps-card h2h-card">
+          <div class="h2h-title">Head-to-Head &middot; <span style="color:var(--muted);font-weight:500;">{total} previous meeting{'s' if total != 1 else ''}</span></div>
+          <div class="h2h-row">
+            <div class="h2h-side">
+              <div class="h2h-photo">{img_a}</div>
+              <div class="h2h-name">{h(name_a)}</div>
+              <div class="h2h-wins">{wins_a}</div>
+            </div>
+            <div class="h2h-bar">
+              <div class="h2h-bar-a" style="width:{pct_a:.1f}%;"></div>
+              <div class="h2h-bar-b" style="width:{pct_b:.1f}%;"></div>
+            </div>
+            <div class="h2h-side h2h-side-right">
+              <div class="h2h-wins">{wins_b}</div>
+              <div class="h2h-name">{h(name_b)}</div>
+              <div class="h2h-photo">{img_b}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _live_for_player(player: str, livescores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     target = canonical_parts(player)
     for ev in livescores:
@@ -1124,8 +1352,8 @@ def render_live_ticker() -> None:
             continue
         a_disp = display_name(a)
         b_disp = display_name(b)
-        a_img = player_image_html(a, size=28)
-        b_img = player_image_html(b, size=28)
+        a_img = player_image_html(a, size=36)
+        b_img = player_image_html(b, size=36)
         items_html.append(
             f'<div class="ticker-item">'
             f'<span class="dot-live"></span>'
@@ -1150,11 +1378,108 @@ def render_live_ticker() -> None:
     )
 
 
+def _render_upcoming_card(r: pd.Series, uid: str, *, state: str = "scheduled") -> None:
+    """Render a single What-if-style match card with live/finished variants.
+
+    state = 'live'      -> red LIVE pill + current game score on top
+            'scheduled' -> AI pick + probability bars
+            'finished'  -> dim card + final score + ✓ on actual winner side
+    """
+    pa = str(r["playerA"])
+    pb = str(r["playerB"])
+    pa_disp = display_name(pa)
+    pb_disp = display_name(pb)
+    p_a = float(r["p_model"])
+    p_b = 1.0 - p_a
+    bar_a = int(round(p_a * 100))
+    bar_b = 100 - bar_a
+    img_a = player_image_html(pa, size=72)
+    img_b = player_image_html(pb, size=72)
+    time_str = (r.get("event_time") or "").strip()
+    surface = str(r.get("surface") or "")
+    round_str = str(r.get("round") or "")
+
+    meta_pieces = []
+    if time_str:
+        meta_pieces.append(f"<span class='up-time'>🕐 {h(time_str)}</span>")
+    if round_str:
+        meta_pieces.append(h(round_str))
+    if surface:
+        meta_pieces.append(h(surface))
+    meta_html = " · ".join(meta_pieces)
+
+    badge_html = ""
+    extra_class = ""
+    if state == "live":
+        score = (r.get("score") or r.get("live_game") or "").strip()
+        badge_html = f"<span class='live-pill-card'>LIVE</span>"
+        if score:
+            badge_html += f"<span class='up-score'>{h(score)}</span>"
+    elif state == "finished":
+        extra_class = "up-card-finished"
+        score = (r.get("score") or "").strip()
+        winner_side = (r.get("winner_side") or "").lower()
+        actual_winner_disp = pa_disp if "first" in winner_side else pb_disp if "second" in winner_side else None
+        badge_html = "<span class='fin-pill-card'>FINAL</span>"
+        if score:
+            badge_html += f"<span class='up-score'>{h(score)}</span>"
+        if actual_winner_disp:
+            badge_html += f"<span class='up-actual'>Winner · <b>{h(actual_winner_disp)}</b></span>"
+
+    pick_disp = display_name(str(r["winner_pick"]))
+    pick_label = "AI PICK" if state != "finished" else "AI PICKED"
+    pick_block = (
+        f"<div class='up-pick'>"
+        f"<div class='up-pick-label'>{pick_label}</div>"
+        f"<div class='up-pick-name'>{h(pick_disp)}</div>"
+        f"<div class='up-pick-conf'>{confidence_label(float(r['winner_prob']))} · "
+        f"{r['winner_prob']*100:.1f}%</div>"
+        f"</div>"
+    )
+
+    chance_a_label = f"{h(pa_disp.split()[-1] if pa_disp else 'A')}'s chance to win"
+    chance_b_label = f"{h(pb_disp.split()[-1] if pb_disp else 'B')}'s chance to win"
+
+    st.markdown(
+        f"""
+        <div class="up-card {extra_class}">
+          <div class="up-meta">{badge_html}{meta_html}</div>
+          <div class="up-row">
+            <div class="up-side">
+              <div class="up-photo">{img_a}</div>
+              <div class="up-info">
+                <div class="up-name">{h(pa_disp)}</div>
+                <div class="up-prob">{chance_a_label}: <b>{p_a*100:.1f}%</b></div>
+                <div class="bar-bg"><div class="bar-fill bar-a" style="width:{bar_a}%;"></div></div>
+              </div>
+            </div>
+            {pick_block}
+            <div class="up-side up-side-right">
+              <div class="up-info up-info-right">
+                <div class="up-name">{h(pb_disp)}</div>
+                <div class="up-prob">{chance_b_label}: <b>{p_b*100:.1f}%</b></div>
+                <div class="bar-bg"><div class="bar-fill bar-b" style="width:{bar_b}%;"></div></div>
+              </div>
+              <div class="up-photo">{img_b}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _render_action_buttons(
+        prefix=uid,
+        player_a=pa,
+        player_b=pb,
+        tournament=str(r.get("tournament") or "") or None,
+    )
+
+
 def _render_upcoming_for_player(player: str, history_df: pd.DataFrame) -> None:
     """If *player* has any fixture in fixtures_upcoming.csv (resolved against
     our history names), show a prominent banner with the AI prediction."""
     fix = load_real_fixtures()
-    if fix.empty:
+    if fix.empty or "playerA" not in fix.columns or "playerB" not in fix.columns:
         return
     by_init_sur, by_surname, _ = _history_player_index(history_df)
     target = _canonical_key(player)
@@ -1165,6 +1490,8 @@ def _render_upcoming_for_player(player: str, history_df: pd.DataFrame) -> None:
     fix["date"] = pd.to_datetime(fix["date"], errors="coerce")
     fix = fix.dropna(subset=["date", "playerA", "playerB"])
     fix = fix[fix["date"] >= pd.Timestamp.today().normalize()]
+    if fix.empty:
+        return
     fix = fix[~fix["playerA"].astype(str).map(is_doubles)]
     fix = fix[~fix["playerB"].astype(str).map(is_doubles)]
     fix["playerA_resolved"] = fix["playerA"].apply(lambda n: resolve_history_name(str(n), by_init_sur, by_surname))
@@ -1241,7 +1568,8 @@ def _render_upcoming_for_player(player: str, history_df: pd.DataFrame) -> None:
 
 def player_image_html(name: str, size: int = 120) -> str:
     """Return an inline <img> tag — local cache first, otherwise SVG avatar."""
-    p = ASSETS_DIR / "players" / slugify(name)
+    history_name = resolve_to_history_name(name)
+    p = ASSETS_DIR / "players" / slugify(history_name)
     img = find_image(p)
     if img and img.exists():
         try:
@@ -1753,11 +2081,15 @@ def _score_fixtures(fix_df: pd.DataFrame, history_df: pd.DataFrame) -> pd.DataFr
             continue
         rows.append({
             "date": pd.Timestamp(r["date"]),
+            "event_time": (str(r.get("event_time") or "").strip() or None),
             "tournament": r.get("tournament", ""),
             "round": r.get("round", ""),
             "surface": r["surface"],
             "playerA": r["playerA"],
             "playerB": r["playerB"],
+            "status": (str(r.get("status") or "").strip().lower() or None),
+            "score": (str(r.get("score") or "").strip() or None),
+            "winner_side": (str(r.get("winner_side") or "").strip() or None),
             "p_model": p,
             "_source": r.get("_source", "real"),
         })
@@ -1876,9 +2208,9 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
         )
         return
 
-    sc = sc[sc["winner_prob"] >= min_conf].sort_values(["date", "winner_prob"], ascending=[True, False])
+    sc = sc[sc["winner_prob"] >= min_conf]
 
-    # Tag matches that are currently live (server name matches any livescore event).
+    # Tag matches currently live (live API players match any pair in our list).
     livescores = cached_livescore()
     live_canon = set()
     for ev in livescores:
@@ -1891,85 +2223,74 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
         axis=1,
     )
 
+    # Status bucket: live > scheduled > finished
+    def _bucket(row):
+        if row.get("is_live"):
+            return "live"
+        status = (row.get("status") or "").lower()
+        if "finish" in status or "ended" in status or "walkover" in status:
+            return "finished"
+        return "scheduled"
+    sc["bucket"] = sc.apply(_bucket, axis=1)
+
+    n_live = int((sc["bucket"] == "live").sum())
+    n_sched = int((sc["bucket"] == "scheduled").sum())
+    n_fin = int((sc["bucket"] == "finished").sum())
+
     st.markdown(
-        f"<div class='ps-section-title'>{len(sc):,} matches scored &middot; "
-        f"<span style='color:var(--muted);font-weight:500;'>filtered to our trained roster ({n_after:,} of {n_before:,} singles)</span></div>",
+        f"<div class='ps-section-title'>{len(sc):,} matches &middot; "
+        f"<span style='color:var(--muted);font-weight:500;'>"
+        f"{n_live} live &middot; {n_sched} scheduled &middot; {n_fin} finished &middot; "
+        f"trained roster only ({n_after:,} of {n_before:,} singles)</span></div>",
         unsafe_allow_html=True,
     )
 
-    for day, group in sc.groupby(sc["date"].dt.date):
-        day_dt = pd.Timestamp(day)
+    # ---- LIVE section first ---------------------------------------------
+    live_df = sc[sc["bucket"] == "live"].copy()
+    if not live_df.empty:
         st.markdown(
-            f"""
-            <div class="date-group">
-              <div class="day"><span class="dow">{day_dt.strftime('%a')}</span>{day_dt.strftime('%B %d, %Y')}</div>
-              <div class="count">{len(group)} match{'es' if len(group) != 1 else ''}</div>
-            </div>
-            """,
+            f"<div class='date-group'><div class='day'>"
+            f"<span class='dow'>Now</span>Live right now</div>"
+            f"<div class='count'>{len(live_df)} match{'es' if len(live_df) != 1 else ''}</div></div>",
             unsafe_allow_html=True,
         )
-        for i, (_, r) in enumerate(group.iterrows()):
-            meta_bits = []
-            if r.get("tournament"):
-                meta_bits.append(str(r["tournament"]))
-            if r.get("surface"):
-                meta_bits.append(str(r["surface"]))
-            if r.get("round"):
-                meta_bits.append(str(r["round"]))
-            meta = " · ".join(meta_bits)
+        for i, (_, r) in enumerate(live_df.iterrows()):
+            _render_upcoming_card(r, f"u_live_{i}", state="live")
 
-            pa = str(r["playerA"])
-            pb = str(r["playerB"])
-            pick = str(r["winner_pick"])
-            pa_disp = display_name(pa)
-            pb_disp = display_name(pb)
-            pick_disp = display_name(pick)
-            p_a = float(r["p_model"])
-            p_b = 1.0 - p_a
-            bar_a = int(round(p_a * 100))
-            bar_b = 100 - bar_a
-            img_a = player_image_html(pa, size=72)
-            img_b = player_image_html(pb, size=72)
-
-            live_badge = '<span class="live-pill-card">LIVE</span>' if r.get("is_live") else ""
+    # ---- SCHEDULED grouped by day -> tournament, sorted by time ---------
+    sched_df = sc[sc["bucket"] == "scheduled"].copy()
+    sched_df["__time"] = sched_df["event_time"].fillna("99:99")
+    sched_df = sched_df.sort_values(["date", "__time", "tournament"])
+    for day, day_group in sched_df.groupby(sched_df["date"].dt.date):
+        day_dt = pd.Timestamp(day)
+        st.markdown(
+            f"<div class='date-group'>"
+            f"<div class='day'><span class='dow'>{day_dt.strftime('%a')}</span>"
+            f"{fmt_date_long(day_dt)}</div>"
+            f"<div class='count'>{len(day_group)} match{'es' if len(day_group) != 1 else ''}</div></div>",
+            unsafe_allow_html=True,
+        )
+        for tour, tour_group in day_group.groupby("tournament", sort=False):
             st.markdown(
-                f"""
-                <div class="up-card">
-                  <div class="up-meta">{live_badge}{h(meta)}</div>
-                  <div class="up-row">
-                    <div class="up-side">
-                      <div class="up-photo">{img_a}</div>
-                      <div class="up-info">
-                        <div class="up-name">{h(pa_disp)}</div>
-                        <div class="up-prob">p(A wins) = <b>{p_a*100:.1f}%</b></div>
-                        <div class="bar-bg"><div class="bar-fill bar-a" style="width:{bar_a}%;"></div></div>
-                      </div>
-                    </div>
-                    <div class="up-pick">
-                      <div class="up-pick-label">AI PICK</div>
-                      <div class="up-pick-name">{h(pick_disp)}</div>
-                      <div class="up-pick-conf">{confidence_label(float(r['winner_prob']))} · {r['winner_prob']*100:.1f}%</div>
-                    </div>
-                    <div class="up-side up-side-right">
-                      <div class="up-info up-info-right">
-                        <div class="up-name">{h(pb_disp)}</div>
-                        <div class="up-prob">p(B wins) = <b>{p_b*100:.1f}%</b></div>
-                        <div class="bar-bg"><div class="bar-fill bar-b" style="width:{bar_b}%;"></div></div>
-                      </div>
-                      <div class="up-photo">{img_b}</div>
-                    </div>
-                  </div>
-                </div>
-                """,
+                f"<div class='tour-subheader'><span>🏆 {h(str(tour) or 'Unknown')}</span>"
+                f"<span class='count'>{len(tour_group)} match{'es' if len(tour_group) != 1 else ''}</span></div>",
                 unsafe_allow_html=True,
             )
-            uid = f"u_{day}_{i}"
-            _render_action_buttons(
-                prefix=uid,
-                player_a=pa,
-                player_b=pb,
-                tournament=str(r.get("tournament") or "") or None,
-            )
+            for i, (_, r) in enumerate(tour_group.iterrows()):
+                _render_upcoming_card(r, f"u_sched_{day}_{slugify(str(tour))}_{i}", state="scheduled")
+
+    # ---- FINISHED at the bottom (newest first) --------------------------
+    fin_df = sc[sc["bucket"] == "finished"].copy()
+    if not fin_df.empty:
+        fin_df = fin_df.sort_values("date", ascending=False)
+        st.markdown(
+            f"<div class='date-group'><div class='day'>"
+            f"<span class='dow'>Done</span>Finished matches</div>"
+            f"<div class='count'>{len(fin_df)} match{'es' if len(fin_df) != 1 else ''}</div></div>",
+            unsafe_allow_html=True,
+        )
+        for i, (_, r) in enumerate(fin_df.iterrows()):
+            _render_upcoming_card(r, f"u_fin_{i}", state="finished")
 
 
 # =============================================================================
@@ -2297,36 +2618,73 @@ def tab_tournaments(history_df: pd.DataFrame) -> None:
         if c_pick != "—":
             st.button(f"Open profile: {c_pick}", key="t_open_champ", on_click=navigate_to_player, args=(c_pick,), width="stretch")
 
-    st.markdown("<div class='ps-section-title'>Most recent matches</div>", unsafe_allow_html=True)
-    recent = sub.sort_values("date", ascending=False).head(25).copy()
-    recent_view = pd.DataFrame({
-        "Date": recent["date"].map(fmt_date_long),
-        "Round": recent.get("round", ""),
-        "Surface": recent["surface"],
-        "Winner": recent["playerA"].map(display_name),
-        "Loser": recent["playerB"].map(display_name),
-        "Score": recent.get("score", ""),
-    })
-    st.dataframe(
-        recent_view,
-        width="stretch",
-        hide_index=True,
-        height=420,
-        column_config={
-            "Date": st.column_config.TextColumn("Date", width="medium"),
-            "Round": st.column_config.TextColumn("Round", width="small"),
-            "Surface": st.column_config.TextColumn("Surface", width="small"),
-            "Winner": st.column_config.TextColumn("Winner", width="medium"),
-            "Loser": st.column_config.TextColumn("Loser", width="medium"),
-            "Score": st.column_config.TextColumn("Score", width="medium"),
-        },
+    # Most recent edition: keep only that season's matches, then cluster
+    # them by round so the bracket flow reads top-down (R128 -> F).
+    latest_year = int(max(years)) if years else None
+    if latest_year:
+        focus = sub[sub["date"].dt.year == latest_year].copy()
+        focus_label = f"{latest_year} edition"
+    else:
+        focus = sub.copy()
+        focus_label = "Most recent matches"
+
+    st.markdown(
+        f"<div class='ps-section-title'>{h(focus_label)} &middot; "
+        f"<span style='color:var(--muted);font-weight:500;'>by round</span></div>",
+        unsafe_allow_html=True,
     )
 
-    st.caption("Open a player from this tournament:")
-    plr_options = ["—"] + sorted(pd.concat([recent["playerA"], recent["playerB"]]).dropna().astype(str).unique().tolist())
-    plr_pick = st.selectbox("Player", plr_options, format_func=lambda k: ("—" if k == "—" else player_label(k)), key="t_jump_player")
-    if plr_pick != "—":
-        st.button(f"Open profile: {plr_pick}", key="t_open_player", on_click=navigate_to_player, args=(plr_pick,), width="stretch")
+    if focus.empty:
+        st.markdown('<div class="empty-state">No matches in the latest edition.</div>', unsafe_allow_html=True)
+        return
+
+    round_col = focus.get("round", pd.Series("", index=focus.index)).astype(str).str.strip().str.upper()
+    focus["round_norm"] = round_col.where(round_col != "", "—")
+    ROUND_ORDER = ["R128", "R64", "R56", "R48", "R32", "RR", "R16", "QF", "SF", "F"]
+    def _r_rank(r):
+        try:
+            return ROUND_ORDER.index(r)
+        except ValueError:
+            return -1  # unknowns first
+
+    for round_name in sorted(focus["round_norm"].unique(), key=_r_rank, reverse=True):
+        chunk = focus[focus["round_norm"] == round_name].sort_values("date")
+        nice = {
+            "F": "Final", "SF": "Semifinals", "QF": "Quarterfinals",
+            "R16": "Round of 16", "R32": "Round of 32", "R64": "Round of 64",
+            "R128": "Round of 128", "RR": "Round Robin",
+        }.get(round_name, round_name)
+        st.markdown(
+            f"<div class='tour-subheader'><span>🎾 {h(nice)}</span>"
+            f"<span class='count'>{len(chunk)} match{'es' if len(chunk) != 1 else ''}</span></div>",
+            unsafe_allow_html=True,
+        )
+        for i, (_, m) in enumerate(chunk.iterrows()):
+            winner = display_name(str(m["playerA"]))
+            loser = display_name(str(m["playerB"]))
+            score = str(m.get("score") or "")
+            date_s = fmt_date_long(m["date"])
+            img_w = player_image_html(str(m["playerA"]), size=44)
+            img_l = player_image_html(str(m["playerB"]), size=44)
+            st.markdown(
+                f"""
+                <div class="round-card">
+                  <div class="round-meta">{h(date_s)}</div>
+                  <div class="round-row">
+                    <div class="round-side round-side-winner">
+                      <div class="round-photo">{img_w}</div>
+                      <div class="round-name">{h(winner)} <span class="round-badge-w">WIN</span></div>
+                    </div>
+                    <div class="round-score">{h(score) or '—'}</div>
+                    <div class="round-side">
+                      <div class="round-name">{h(loser)}</div>
+                      <div class="round-photo">{img_l}</div>
+                    </div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 # =============================================================================
@@ -2435,11 +2793,13 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
+    render_h2h(pa, pb)
+
     cols = st.columns([1, 1, 4])
     with cols[0]:
-        st.button(f"Open profile: {pa}", key="w_open_pa", on_click=navigate_to_player, args=(pa,), width="stretch")
+        st.button(f"👤 {display_name(pa)}", key="w_open_pa", on_click=navigate_to_player, args=(pa,), width="stretch")
     with cols[1]:
-        st.button(f"Open profile: {pb}", key="w_open_pb", on_click=navigate_to_player, args=(pb,), width="stretch")
+        st.button(f"👤 {display_name(pb)}", key="w_open_pb", on_click=navigate_to_player, args=(pb,), width="stretch")
 
 
 # =============================================================================
@@ -2610,26 +2970,33 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
     for c in ("Wins", "Losses", "Matches"):
         lb[c] = lb[c].astype(int)
 
-    # Render rich cards
-    for i, row in enumerate(lb.itertuples(index=False)):
-        rank = int(row.Rank)
-        player = row.Player
+    # Render rich cards. iterrows() preserves the original column names
+    # (itertuples mangles "Win rate" into "_5" / "Win_rate" depending on
+    # pandas version, which is what hid every stat except Streak earlier).
+    cache = _load_player_cache()
+    for i, (_, row) in enumerate(lb.iterrows()):
+        rank = int(row["Rank"])
+        player = str(row["Player"])
         full = display_name(player)
-        cache = _load_player_cache()
         meta = cache.get(player)
         flag = (meta.flag if meta and meta.flag and meta.flag != "🏳️" else "")
         country = (meta.country if meta and meta.country else "")
         photo = player_image_html(player, size=64)
 
-        wr = float(row._asdict().get("Win rate", 0) or 0)
-        l30 = float(row._asdict().get("L30 WR") or float("nan"))
-        ai = float(row._asdict().get("AI accuracy") or float("nan"))
-        best_surface = row._asdict().get("Best surface") or ""
-        streak_lbl = row.StreakLabel
+        def _val(key):
+            v = row.get(key)
+            return v if pd.notna(v) else None
+
+        wr = _val("Win rate")
+        l30 = _val("L30 WR")
+        ai = _val("AI accuracy")
+        best_surface = _val("Best surface") or ""
+        streak_lbl = row.get("StreakLabel") or ""
         streak_class = "good" if streak_lbl.startswith("W") else "bad" if streak_lbl.startswith("L") else ""
 
-        l30_html = f"{l30:.1f}%" if not pd.isna(l30) else "-"
-        ai_html = f"{ai:.1f}%" if not pd.isna(ai) else "-"
+        wr_html = f"{wr:.1f}%" if wr is not None else "-"
+        l30_html = f"{l30:.1f}%" if l30 is not None else "-"
+        ai_html = f"{ai:.1f}%" if ai is not None else "-"
 
         st.markdown(
             f"""
@@ -2638,9 +3005,9 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
               <div class="lb-photo">{photo}</div>
               <div class="lb-meta">
                 <div class="lb-name">{flag} {h(full)}</div>
-                <div class="lb-sub">{h(country) or '&nbsp;'} &middot; {row.Matches:,} matches &middot; {row.Wins:,}-{row.Losses:,} W-L</div>
+                <div class="lb-sub">{h(country) or '&nbsp;'} &middot; {int(row['Matches']):,} matches &middot; {int(row['Wins']):,}-{int(row['Losses']):,} W-L</div>
               </div>
-              <div class="lb-stat"><div class="lb-stat-label">Win rate</div><div class="lb-stat-val">{wr:.1f}%</div></div>
+              <div class="lb-stat"><div class="lb-stat-label">Win rate</div><div class="lb-stat-val">{wr_html}</div></div>
               <div class="lb-stat"><div class="lb-stat-label">Last 30d</div><div class="lb-stat-val">{l30_html}</div></div>
               <div class="lb-stat"><div class="lb-stat-label">AI Acc</div><div class="lb-stat-val">{ai_html}</div></div>
               <div class="lb-stat"><div class="lb-stat-label">Surface</div><div class="lb-stat-val small">{h(best_surface) or '-'}</div></div>
@@ -2650,7 +3017,7 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
         st.button(
-            f"👤 Open profile",
+            f"👤 View profile",
             key=f"lb_open_{i}",
             on_click=navigate_to_player,
             args=(player,),

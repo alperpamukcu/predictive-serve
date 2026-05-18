@@ -44,8 +44,6 @@ def to_fixtures_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not date_str or not pA or not pB:
             continue
         tournament = _tournament_name(ev)
-        # API-Tennis fixtures don't carry a reliable surface; infer from the
-        # tournament name and fall back to "Hard" only as a last resort.
         surface = (
             _clean(ev.get("tournament_surface"))
             or guess_surface_from_tournament(tournament)
@@ -54,6 +52,7 @@ def to_fixtures_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             {
                 "match_id": match_id,
                 "date": date_str,
+                "event_time": _clean(ev.get("event_time")),
                 "tournament": tournament,
                 "surface": surface,
                 "round": _round_guess(ev),
@@ -61,6 +60,11 @@ def to_fixtures_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "playerB": pB,
                 "oddsA": None,
                 "oddsB": None,
+                # match status + result for finished/live cards
+                "status": _clean(ev.get("event_status")),
+                "score": _clean(ev.get("event_final_result")),
+                "live_game": _clean(ev.get("event_game_result")),
+                "winner_side": _clean(ev.get("event_winner")),  # "First Player" / "Second Player"
                 # raw fields for later syncing/assets
                 "playerA_raw": pA,
                 "playerB_raw": pB,
@@ -85,13 +89,25 @@ def main() -> int:
     cache_ttl = getenv_int("API_TENNIS_CACHE_TTL_S", 600)
 
     days = max(1, min(getenv_int("UPCOMING_DAYS", 14), 30))
-    start = dt.date.today()
-    stop = start + dt.timedelta(days=days - 1)
+    past_days = max(0, min(getenv_int("UPCOMING_PAST_DAYS", 2), 14))
+    today = dt.date.today()
+    start = today - dt.timedelta(days=past_days)
+    stop = today + dt.timedelta(days=days - 1)
 
     cfg = ApiTennisConfig(api_key=api_key, base_url=base_url, proxy=proxy, cache_ttl_s=cache_ttl)
     print(f"[api-tennis] Fetching fixtures: {start}..{stop} (cache_ttl={cache_ttl}s)")
 
-    events = get_fixtures(cfg, date_start=start, date_stop=stop)
+    # API-Tennis 500s on >14-day windows. Chunk into ~14-day slices.
+    events: List[Dict[str, Any]] = []
+    cur = start
+    while cur <= stop:
+        chunk_stop = min(cur + dt.timedelta(days=13), stop)
+        try:
+            events.extend(get_fixtures(cfg, date_start=cur, date_stop=chunk_stop))
+        except Exception as e:
+            print(f"[api-tennis] WARNING: chunk {cur}..{chunk_stop} failed: {e}")
+        cur = chunk_stop + dt.timedelta(days=1)
+
     rows = to_fixtures_rows(events)
     if not rows:
         print("[api-tennis] WARNING: No fixtures returned.")
