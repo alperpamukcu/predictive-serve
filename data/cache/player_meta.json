@@ -7642,5 +7642,18 @@
     "logo_url": "https://api.api-tennis.com/logo-tennis/7011_j-draper.jpg",
     "fetched_at": "2026-05-07T15:16:51.568421Z",
     "not_found": false
+  },
+  "Cadenasso G.": {
+    "name": "Cadenasso G.",
+    "full_name": "Gianluca Cadenasso",
+    "country": "Italy",
+    "country_code": "IT",
+    "flag": "🇮🇹",
+    "birthday": "29.09.2004",
+    "age": 21,
+    "player_key": 38798,
+    "logo_url": "https://api.api-tennis.com/logo-tennis/38798_g-cadenasso.jpg",
+    "fetched_at": "2026-05-18T07:59:16.285480Z",
+    "not_found": false
   }
 }
