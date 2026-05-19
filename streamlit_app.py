@@ -694,6 +694,10 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
   background: var(--good-soft); color: #afe9d3; font-weight: 800;
   vertical-align: middle;
 }
+.round-winner-photo > div, .round-winner-photo > img {
+  border-color: rgba(45, 210, 154, 0.55) !important;
+  box-shadow: 0 0 14px rgba(45, 210, 154, 0.25);
+}
 .round-score {
   padding: 8px 16px; border-radius: 10px;
   background: rgba(106,169,255,0.10);
