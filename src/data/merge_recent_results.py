@@ -19,6 +19,7 @@ Idempotent. Designed to be re-run nightly.
 from __future__ import annotations
 
 import sys
+from collections import Counter
 
 import pandas as pd
 
@@ -29,6 +30,41 @@ from src.utils.player_meta import build_history_index, canonical_parts, resolve_
 
 HISTORY_PATH = PROCESSED_DIR / "matches_clean.csv"
 API_PATH = PROCESSED_DIR / "recent_results_apitennis.csv"
+
+# A genuine ATP main-tour match is between two players who BOTH have a
+# real history on tour. Qualifying / ITF / junior players have ~0 prior
+# main-tour matches, so requiring this cleanly drops the qualifying-week
+# pollution (e.g. Roland Garros qualifying labelled "French Open" with
+# everyone sitting at base Elo 1500).
+MIN_HISTORY_MATCHES = 20
+
+# tennis-data.co.uk and api-tennis.com disagree on a handful of tournament
+# names. Normalise the API spelling onto the historical one so the same
+# event isn't split in the Tournaments tab.
+TOURNAMENT_ALIASES = {
+    "rome": "Internazionali BNL d'Italia",
+    "internazionali bnl d'italia": "Internazionali BNL d'Italia",
+    "madrid": "Madrid Masters",
+    "mutua madrid open": "Madrid Masters",
+    "monte carlo": "Monte Carlo Masters",
+    "rolex monte-carlo masters": "Monte Carlo Masters",
+    "indian wells": "Indian Wells Masters",
+    "miami": "Miami Masters",
+    "miami open": "Miami Masters",
+    "canada": "Canada Masters",
+    "cincinnati": "Cincinnati Masters",
+    "shanghai": "Shanghai Masters",
+    "paris": "Paris Masters",
+    "us open": "US Open",
+    "french open": "French Open",
+    "australian open": "Australian Open",
+    "wimbledon": "Wimbledon",
+}
+
+
+def _normalise_tourney(name: str) -> str:
+    key = str(name or "").strip().lower()
+    return TOURNAMENT_ALIASES.get(key, str(name or "").strip())
 
 
 def _canonical_pair_key(date_str: str, a: str, b: str) -> str:
@@ -88,6 +124,40 @@ def main() -> int:
 
     if new_rows.empty:
         return 0
+
+    # --- Drop qualifying / ITF / junior pollution ------------------------
+    # Count how many historical main-tour matches each canonical player has.
+    hist_counts: Counter = Counter()
+    for col in ("playerA", "playerB"):
+        for n in history[col].dropna().astype(str):
+            k = canonical_parts(n)
+            if k[1]:
+                hist_counts[k] += 1
+
+    def _established(name: str) -> bool:
+        return hist_counts.get(canonical_parts(str(name)), 0) >= MIN_HISTORY_MATCHES
+
+    before = len(new_rows)
+    keep_mask = new_rows.apply(
+        lambda r: _established(r["playerA"]) and _established(r["playerB"]), axis=1
+    )
+    dropped = new_rows[~keep_mask]
+    new_rows = new_rows[keep_mask].copy()
+    print(
+        f"[merge] tour-level filter: kept {len(new_rows)}/{before} "
+        f"(dropped {before - len(new_rows)} qualifying/ITF-level matches; "
+        f"both players need >= {MIN_HISTORY_MATCHES} prior main-tour matches)"
+    )
+    if not dropped.empty:
+        drop_tourneys = dropped["tourney"].value_counts().head(6).to_dict()
+        print(f"[merge]   dropped by tournament: {drop_tourneys}")
+
+    if new_rows.empty:
+        print("[merge] nothing left to merge after the tour-level filter.")
+        return 0
+
+    # Normalise tournament names so the API spelling lines up with history.
+    new_rows["tourney"] = new_rows["tourney"].apply(_normalise_tourney)
 
     # Concatenate, sort by date, write back. Keep schema column order.
     combined = pd.concat([history, new_rows], ignore_index=True, sort=False)
