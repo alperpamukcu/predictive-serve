@@ -1,8 +1,8 @@
 # src/features/elo.py
 
 from pathlib import Path
-from collections import defaultdict
-from typing import Tuple, Dict
+from collections import defaultdict, deque
+from typing import Deque, Tuple, Dict
 
 import pandas as pd
 
@@ -53,11 +53,22 @@ def compute_elo_for_matches(
     # Rating sözlükleri
     overall_ratings: Dict[str, float] = defaultdict(lambda: base_elo)
     surface_ratings: Dict[Tuple[str, str], float] = defaultdict(lambda: base_elo)
+    # Per-player recent Elo history for momentum (Elo now vs ~5 matches ago)
+    elo_history: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=6))
 
     eloA_list = []
     eloB_list = []
     elo_surfaceA_list = []
     elo_surfaceB_list = []
+    elo_momentumA_list = []
+    elo_momentumB_list = []
+
+    def _momentum(player: str, current: float) -> float:
+        """Current Elo minus the Elo recorded ~5 matches ago. 0 if too new."""
+        hist = elo_history[player]
+        if not hist:
+            return 0.0
+        return current - hist[0]
 
     for _, row in df.iterrows():
         playerA = row["playerA_norm"]
@@ -77,6 +88,8 @@ def compute_elo_for_matches(
         eloB_list.append(rB)
         elo_surfaceA_list.append(rA_surf)
         elo_surfaceB_list.append(rB_surf)
+        elo_momentumA_list.append(_momentum(playerA, rA))
+        elo_momentumB_list.append(_momentum(playerB, rB))
 
         # Maç sonucu: playerA her zaman kazanan (winner = 'A')
         scoreA = 1.0
@@ -96,11 +109,17 @@ def compute_elo_for_matches(
         surface_ratings[keyA_surf] = rA_surf + k_surface * (scoreA - expA_surf)
         surface_ratings[keyB_surf] = rB_surf + k_surface * (scoreB - expB_surf)
 
+        # Record post-match Elo for momentum tracking
+        elo_history[playerA].append(overall_ratings[playerA])
+        elo_history[playerB].append(overall_ratings[playerB])
+
     # Yeni kolonları DataFrame'e ekle
     df["eloA"] = eloA_list
     df["eloB"] = eloB_list
     df["elo_surfaceA"] = elo_surfaceA_list
     df["elo_surfaceB"] = elo_surfaceB_list
+    df["elo_momentumA"] = elo_momentumA_list
+    df["elo_momentumB"] = elo_momentumB_list
 
     return df
 

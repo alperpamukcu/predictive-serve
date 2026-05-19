@@ -306,6 +306,8 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("playerA_norm", "playerB_norm"),
         ("eloA", "eloB"),
         ("elo_surfaceA", "elo_surfaceB"),
+        ("elo_momentumA", "elo_momentumB"),
+        ("win_streakA", "win_streakB"),
         ("form_winrateA_5", "form_winrateB_5"),
         ("form_winrateA_10", "form_winrateB_10"),
         ("days_since_lastA", "days_since_lastB"),
@@ -400,6 +402,10 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
         df["elo_diff"] = df["eloA"] - df["eloB"]
     if "elo_surfaceA" in df.columns and "elo_surfaceB" in df.columns:
         df["elo_surface_diff"] = df["elo_surfaceA"] - df["elo_surfaceB"]
+    if "elo_momentumA" in df.columns and "elo_momentumB" in df.columns:
+        df["elo_momentum_diff"] = df["elo_momentumA"] - df["elo_momentumB"]
+    if "win_streakA" in df.columns and "win_streakB" in df.columns:
+        df["win_streak_diff"] = df["win_streakA"] - df["win_streakB"]
 
     # Form
     if "form_winrateA_5" in df.columns and "form_winrateB_5" in df.columns:
@@ -488,6 +494,8 @@ def build_feature_dataset(
         # Elo
         "eloA", "eloB", "elo_diff",
         "elo_surfaceA", "elo_surfaceB", "elo_surface_diff",
+        "elo_momentumA", "elo_momentumB", "elo_momentum_diff",
+        "win_streakA", "win_streakB", "win_streak_diff",
         # Form
         "form_winrateA_5", "form_winrateB_5", "form_winrate_diff_5",
         "form_winrateA_10", "form_winrateB_10", "form_winrate_diff_10",
@@ -517,11 +525,21 @@ def build_feature_dataset(
     # Sadece gerçekten var olan kolonları al
     feature_cols = [c for c in feature_cols if c in df.columns]
 
+    # Keep tournament + round as meta columns (not features) so downstream
+    # scoring + UI can show which event a match belongs to.
+    if "tourney" in df.columns and "tournament" not in df.columns:
+        df["tournament"] = df["tourney"]
+    meta_extra = [c for c in ["tournament", "round"] if c in df.columns]
+
     cols_to_keep = (
         ["date", "surface", "playerA", "playerB"]
+        + meta_extra
         + feature_cols
         + ["y"]
     )
+    # de-dup while preserving order
+    seen: set = set()
+    cols_to_keep = [c for c in cols_to_keep if not (c in seen or seen.add(c))]
 
     df_out = df[cols_to_keep].copy()
 

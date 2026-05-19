@@ -4,6 +4,12 @@ elo_diff
 elo_surfaceA
 elo_surfaceB
 elo_surface_diff
+elo_momentumA
+elo_momentumB
+elo_momentum_diff
+win_streakA
+win_streakB
+win_streak_diff
 form_winrateA_5
 form_winrateB_5
 form_winrate_diff_5

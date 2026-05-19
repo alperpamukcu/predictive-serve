@@ -106,7 +106,11 @@ def main() -> None:
     p_blend_full = np.where(np.isfinite(p_market), alpha * p_model + (1 - alpha) * p_market, p_model)
     p_blend_full = np.clip(p_blend_full, 1e-7, 1 - 1e-7)
 
-    out = df[["date", "surface", "playerA", "playerB", "y"]].copy()
+    meta_keep = ["date", "surface", "playerA", "playerB", "y"]
+    for extra in ("tournament", "round"):
+        if extra in df.columns:
+            meta_keep.append(extra)
+    out = df[meta_keep].copy()
     out["p_model"] = p_model
     out["pA_market"] = p_market
     out["edge"] = edge

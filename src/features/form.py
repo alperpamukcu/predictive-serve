@@ -59,6 +59,23 @@ def compute_form_features(
     days_since_lastB: List[float] = []
     matches_last30A: List[int] = []
     matches_last30B: List[int] = []
+    win_streakA: List[int] = []
+    win_streakB: List[int] = []
+
+    def _signed_streak(hist: Deque[int]) -> int:
+        """Signed streak going into the match: +N consecutive wins,
+        -N consecutive losses, 0 if no history."""
+        if not hist:
+            return 0
+        vals = list(hist)
+        last = vals[-1]
+        streak = 0
+        for v in reversed(vals):
+            if v == last:
+                streak += 1
+            else:
+                break
+        return streak if last == 1 else -streak
 
     for _, row in df.iterrows():
         date = row["date"]
@@ -121,6 +138,8 @@ def compute_form_features(
         days_since_lastB.append(dB)
         matches_last30A.append(mA)
         matches_last30B.append(mB)
+        win_streakA.append(_signed_streak(histA))
+        win_streakB.append(_signed_streak(histB))
 
         # Şimdi sonucu tarihle birlikte geçmişe ekleyelim
         # Bu maçta playerA kazandı, playerB kaybetti
@@ -142,6 +161,8 @@ def compute_form_features(
     df["days_since_lastB"] = days_since_lastB
     df["matches_last30A"] = matches_last30A
     df["matches_last30B"] = matches_last30B
+    df["win_streakA"] = win_streakA
+    df["win_streakB"] = win_streakB
 
     return df
 

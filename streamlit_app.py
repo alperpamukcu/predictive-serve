@@ -625,6 +625,26 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 .cov-card ul { margin: 0; padding-left: 18px; color: var(--text); font-size: 0.88rem; line-height: 1.6; }
 .cov-card ul i { color: var(--muted); font-style: italic; }
 
+/* Tale of the tape */
+.tot-head, .tot-row {
+  display: grid; grid-template-columns: 1fr 1.4fr 1fr;
+  align-items: center; gap: 12px;
+}
+.tot-head { padding: 4px 0 8px 0; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tot-row { padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.tot-row:last-child { border-bottom: none; }
+.tot-val {
+  text-align: center; font-weight: 700; font-size: 1.0rem;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.tot-val.tot-a, .tot-val.tot-b { color: #fff; }
+.tot-val.tot-a::after { content: " ◂"; color: var(--accent); font-size: 0.8rem; }
+.tot-val.tot-b::before { content: "▸ "; color: var(--accent); font-size: 0.8rem; }
+.tot-label {
+  text-align: center; color: var(--soft-muted);
+  font-size: 0.78rem; letter-spacing: 0.03em; text-transform: uppercase; font-weight: 600;
+}
+
 /* H2H card */
 .h2h-card { padding: 16px 22px; }
 .h2h-title { font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -0.01em; }
@@ -1376,6 +1396,84 @@ def render_h2h(player_a: str, player_b: str) -> None:
               <div class="h2h-photo">{img_b}</div>
             </div>
           </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_tale_of_tape(row_df: pd.DataFrame, name_a: str, name_b: str) -> None:
+    """Per-match explainability: a 'tale of the tape' comparing the feature
+    values that drove the model's probability. Not SHAP — but every number
+    here is a real model input, so the user can see *why*."""
+    if row_df is None or row_df.empty:
+        return
+    r = row_df.iloc[0]
+
+    def _g(col):
+        v = r.get(col)
+        try:
+            return float(v) if pd.notna(v) else None
+        except Exception:
+            return None
+
+    # (label, A value, B value, higher_is_better_for_A, formatter)
+    rows: List[Tuple[str, Optional[float], Optional[float], str]] = []
+
+    def _add(label, a, b, fmt="{:.0f}"):
+        if a is None and b is None:
+            return
+        rows.append((label, a, b, fmt))
+
+    _add("Overall Elo", _g("eloA"), _g("eloB"))
+    _add("Surface Elo", _g("elo_surfaceA"), _g("elo_surfaceB"))
+    _add("Elo momentum (last 5)", _g("elo_momentumA"), _g("elo_momentumB"), "{:+.0f}")
+    f10a, f10b = _g("form_winrateA_10"), _g("form_winrateB_10")
+    _add("Form — last 10", None if f10a is None else f10a * 100, None if f10b is None else f10b * 100, "{:.0f}%")
+    _add("Win streak", _g("win_streakA"), _g("win_streakB"), "{:+.0f}")
+    h2a, h2b = _g("h2h_winrateA"), _g("h2h_winrateB")
+    _add("Head-to-head win %", None if h2a is None else h2a * 100, None if h2b is None else h2b * 100, "{:.0f}%")
+    hsa, hsb = _g("h2h_surface_winrateA"), _g("h2h_surface_winrateB")
+    _add("H2H on this surface", None if hsa is None else hsa * 100, None if hsb is None else hsb * 100, "{:.0f}%")
+    # Rest days — fewer is "fresher" but we display raw
+    _add("Days since last match", _g("days_since_lastA_clipped"), _g("days_since_lastB_clipped"))
+    ra, rb = _g("rankA"), _g("rankB")
+    _add("ATP rank", ra, rb, "{:.0f}")
+
+    if not rows:
+        return
+
+    body = []
+    for label, a, b, fmt in rows:
+        a_txt = "—" if a is None else fmt.format(a)
+        b_txt = "—" if b is None else fmt.format(b)
+        # Who's ahead? For "rank" lower is better; everything else higher.
+        a_better = None
+        if a is not None and b is not None and a != b:
+            if label == "ATP rank" or label == "Days since last match":
+                a_better = a < b
+            else:
+                a_better = a > b
+        a_cls = "tot-a" if a_better is True else ""
+        b_cls = "tot-b" if a_better is False else ""
+        body.append(
+            f'<div class="tot-row">'
+            f'<div class="tot-val {a_cls}">{h(a_txt)}</div>'
+            f'<div class="tot-label">{h(label)}</div>'
+            f'<div class="tot-val {b_cls}">{h(b_txt)}</div>'
+            f'</div>'
+        )
+
+    st.markdown(
+        f"""
+        <div class="ps-card">
+          <div class="h2h-title">Why this prediction &middot; <span style="color:var(--muted);font-weight:500;">the model inputs behind the number</span></div>
+          <div class="tot-head">
+            <div class="tot-val" style="color:#fff;">{h(display_name(name_a))}</div>
+            <div class="tot-label">&nbsp;</div>
+            <div class="tot-val" style="color:#fff;">{h(display_name(name_b))}</div>
+          </div>
+          {''.join(body)}
         </div>
         """,
         unsafe_allow_html=True,
@@ -2225,6 +2323,7 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
     # chronologically (a text "1 May 2026" sorts before "10 April 2026").
     show = pd.DataFrame({
         "Date": df["date"].dt.date,
+        "Tournament": df["tournament"] if "tournament" in df.columns else "",
         "Surface": df["surface"],
         "Player A": df["playerA"].map(display_name),
         "Player B": df["playerB"].map(display_name),
@@ -2237,6 +2336,7 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
 
     column_config = {
         "Date": st.column_config.DateColumn("Date", format="DD MMMM YYYY", width="medium"),
+        "Tournament": st.column_config.TextColumn("Tournament", width="medium"),
         "Confidence": st.column_config.NumberColumn("Confidence", format="%.1f%%"),
     }
 
@@ -3106,6 +3206,7 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
+    render_tale_of_tape(row_df, pa, pb)
     render_h2h(pa, pb)
 
     cols = st.columns([1, 1, 4])

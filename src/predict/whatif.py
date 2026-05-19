@@ -30,6 +30,8 @@ class PlayerSnapshot:
     days_since_last: float
     matches_last30: float
     rank: float
+    elo_momentum: float = float("nan")
+    win_streak: float = float("nan")
 def map_round_importance(round_code: Optional[str]) -> Tuple[float, int, int, int]:
     """build_features.py ile uyumlu round feature'ları döner."""
     if not round_code:
@@ -98,6 +100,8 @@ def get_player_snapshot(
     days_since = safe("days_since_last")
     matches30 = safe("matches_last30")
     rank = safe("rank")
+    elo_momentum = safe("elo_momentum")
+    win_streak = safe("win_streak")
 
     return PlayerSnapshot(
         elo=elo,
@@ -107,6 +111,8 @@ def get_player_snapshot(
         days_since_last=days_since,
         matches_last30=matches30,
         rank=rank,
+        elo_momentum=elo_momentum,
+        win_streak=win_streak,
     )
 
 
@@ -174,6 +180,10 @@ def build_feature_row(
         row["days_since_lastA_clipped"] = min(max(snapA.days_since_last, 0), 365)
         row["matches_last30A"] = snapA.matches_last30
         row["rankA"] = snapA.rank
+        if "elo_momentumA" in row:
+            row["elo_momentumA"] = snapA.elo_momentum
+        if "win_streakA" in row:
+            row["win_streakA"] = snapA.win_streak
 
     if snapB:
         row["eloB"] = snapB.elo
@@ -183,6 +193,10 @@ def build_feature_row(
         row["days_since_lastB_clipped"] = min(max(snapB.days_since_last, 0), 365)
         row["matches_last30B"] = snapB.matches_last30
         row["rankB"] = snapB.rank
+        if "elo_momentumB" in row:
+            row["elo_momentumB"] = snapB.elo_momentum
+        if "win_streakB" in row:
+            row["win_streakB"] = snapB.win_streak
 
     # Fark feature'ları
     # PRO-TOUCH: If one player is missing (NaN), assume they are a Rookie (Elo 1500)
@@ -201,6 +215,18 @@ def build_feature_row(
     val_surfA = row["elo_surfaceA"] if pd.notna(row.get("elo_surfaceA")) else 1500.0
     val_surfB = row["elo_surfaceB"] if pd.notna(row.get("elo_surfaceB")) else 1500.0
     row["elo_surface_diff"] = val_surfA - val_surfB
+
+    # Elo momentum + win-streak diffs
+    if "elo_momentum_diff" in row:
+        mA = row.get("elo_momentumA")
+        mB = row.get("elo_momentumB")
+        if pd.notna(mA) and pd.notna(mB):
+            row["elo_momentum_diff"] = mA - mB
+    if "win_streak_diff" in row:
+        sA = row.get("win_streakA")
+        sB = row.get("win_streakB")
+        if pd.notna(sA) and pd.notna(sB):
+            row["win_streak_diff"] = sA - sB
 
     # (This block replaced by above consolidated logic)
     pass

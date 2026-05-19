@@ -16,7 +16,7 @@ LEAKY_MARKET_COLS: Set[str] = {
 }
 
 # Meta columns kept alongside features for filtering / display.
-META_COLS: Set[str] = {"date", "surface", "playerA", "playerB", "y"}
+META_COLS: Set[str] = {"date", "surface", "playerA", "playerB", "y", "tournament", "round"}
 
 
 def load_feature_list(path: Path) -> List[str]:
