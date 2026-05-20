@@ -1,46 +1,67 @@
 # Predictive Serve 🎾
 
-**Predictive Serve** is an end-to-end Python application for **professional tennis match
-forecasting**. It combines a reproducible historical data pipeline, leakage-safe feature
-engineering, a calibrated gradient-boosted model, and a polished Streamlit console that
-explores predictions, live upcoming fixtures, and per-player / per-tournament profiles.
+**Predictive Serve** is a live, self-updating tennis forecasting console.
+An end-to-end Python pipeline ingests two decades of ATP data, engineers
+~70 leakage-safe features, trains a calibrated gradient-boosted model
+against a held-out 2025+ test split, blends the result with the bookmaker
+prior, and serves it all through a Streamlit UI with a live-score ticker,
+upcoming-fixture cards and full per-player profiles.
+
+A GitHub Actions cron refreshes everything every night at 04:00 UTC, so
+the deployed app is always within ~24 hours of the latest match.
 
 ---
 
 ## What it does
 
-- **Historical pipeline** — downloads ATP match data from [tennis-data.co.uk](http://www.tennis-data.co.uk)
-  (seasons 2000-present) and rebuilds a clean, deduplicated match table.
-- **Feature engineering** — global + surface Elo, short- and long-term form, head-to-head,
-  workload, surface, round importance, and tournament tier.
-- **Production model** — `HistGradientBoostingClassifier` selected against a Logistic
-  Regression baseline, with optional Platt / Isotonic calibration on a within-train slice.
-  Market-derived features are **excluded by design** so the AI signal is independent of
-  bookmaker prices.
-- **Time-aware splits** — train (year < 2022), validation (2022-2024), held-out test
-  (year ≥ 2025). Metrics are persisted to `models/metrics.json`.
-- **Live upcoming fixtures** — fetched from [api-tennis.com](https://api-tennis.com) with
-  intelligent surface inference and median consensus odds across books.
-- **Streamlit console** — six views (Matches, Upcoming, Players, Tournaments, What-if,
-  Leaderboard) with click-through navigation between them.
+- **Historical pipeline** — downloads ATP match data from
+  [tennis-data.co.uk](http://www.tennis-data.co.uk) (seasons 2000-present)
+  and rebuilds a clean, deduplicated match table.
+- **Live recent-results supplement** — pulls finished singles matches
+  from the last 21 days off [api-tennis.com](https://api-tennis.com) and
+  merges them into the historical archive, with a tour-level filter that
+  drops qualifying / ITF / junior matches (both players must have ≥ 20
+  prior main-tour matches).
+- **Feature engineering (76 columns → 69 leakage-safe model inputs)**:
+  - **Elo**: global + per-surface + Grand-Slam-only tier-specific Elo,
+    with **538-style margin-of-victory weighting** and a **dynamic
+    K-factor** that decays from ~50 for debutants to ~27 for veterans.
+  - **Elo momentum** + signed **win streak** + **recency-weighted last-10
+    form** (linear decay).
+  - **Head-to-head**: overall + per-surface H2H win-rate counters.
+  - **Common opponent**: transitive "if A beat C and B lost to C" signal
+    aggregated over every shared opponent.
+  - **Set + tiebreak features**: career set win-rate, deciding-set
+    win-rate, career tiebreak win-rate — parsed straight from the score
+    string.
+  - **Context**: round importance, tournament tier (Grand Slam → 4.0,
+    Masters 1000 → 3.0, ATP 500 → 2.0, ATP 250 → 1.5), best-of-5 flag,
+    surface one-hots, rank, rest days, workload.
+- **Model selection** — `HistGradientBoosting`, `LightGBM`, `LogReg` and
+  a soft-voting ensemble of all three are evaluated against a 2022-2024
+  validation split. Best wins on validation log-loss. Calibration is
+  attempted but only kept when it improves log-loss.
+- **Per-year market-prior blend** — α is fit separately for each
+  validation season, so the blend tracks how good the bookmaker is in
+  recent years vs older ones. Live predictions and test scoring use the
+  most recent season's α.
+- **No data leakage by construction** —
+  [`src/utils/feature_utils.py`](./src/utils/feature_utils.py) owns the
+  single `LEAKY_MARKET_COLS` allow-list. `select_model_features` enforces
+  it in every training and scoring path. The "edge" displayed in the UI
+  is therefore a real, independent model-vs-market signal.
 
----
+### Current metrics (latest pipeline)
 
-## Screenshots & feature highlights
+| Metric | Pure AI | **Market-aware blend** | Bookmaker val baseline |
+|---|---|---|---|
+| Validation log loss | 0.6033 | **0.5831** | 0.5829 |
+| Validation accuracy | 66.06 % | **68.21 %** | 68.12 % |
+| Held-out 2025 test log loss | 0.6089 | **0.5899** | — |
+| **Held-out 2025 test accuracy (3,602 matches)** | 66.10 % | **🏆 68.13 %** | — |
 
-- 🟢 **Matches Explorer** — historical predictions with pastel green / red row tinting
-  showing which calls the AI got right.
-- 📅 **Upcoming** — live fixtures grouped by day, with model probabilities and confidence
-  pills. Falls back to a labelled demo dataset when no API key is configured.
-- 👤 **Players** — searchable / filterable roster sorted by career match count, full Elo
-  trajectory chart, surface breakdown, and on-demand player photo download via API-Tennis.
-- 🏆 **Tournaments** — per-event volume, recent champions list, and all-time matches.
-- 🎲 **What-if** — pick any two players, surface, round, and date; the model produces a
-  win-probability split with two-way pacing bars.
-- 🏅 **Leaderboard** — windowed win-rate ranking with per-surface filters.
-
-Every view contains "Open profile" jumps so a player or tournament name in any context can
-take you to its full profile in one click.
+The blend is what the UI shows by default — it beats the pure bookmaker
+baseline on the held-out test split.
 
 ---
 
@@ -48,21 +69,16 @@ take you to its full profile in one click.
 
 ### Prerequisites
 
-- **Python 3.10+** (the project is tested on 3.11)
-- On Windows, the [`py` launcher](https://docs.python.org/3/using/windows.html#getting-started)
+- **Python 3.11+** (tested on 3.11.x)
+- On Windows, the [`py` launcher](https://docs.python.org/3/using/windows.html)
   is recommended.
 
 ### One-click launch (Windows)
 
-Double-click [`run_predictive_serve.bat`](./run_predictive_serve.bat). The script will:
-
-1. Install dependencies from [`requirements.txt`](./requirements.txt)
-2. Download historical match data
-3. Run the data + feature pipeline
-4. Train and evaluate the model
-5. Score every match in the dataset
-6. (Optional) fetch live upcoming fixtures + odds via API-Tennis
-7. Open the Streamlit UI on `http://localhost:8501`
+Double-click [`run_predictive_serve.bat`](./run_predictive_serve.bat).
+The script installs dependencies, runs the full data + feature + train +
+score pipeline, fetches live fixtures + player photos via API-Tennis,
+then opens the Streamlit UI on `http://localhost:8501`.
 
 ### Manual setup (any OS)
 
@@ -74,23 +90,24 @@ py -m src.data.fetch_data
 py -m src.data.preprocess
 py -m src.data.cleaning
 
-# 2) Feature engineering
+# 2) (Optional) Supplement with finished API-Tennis matches
+py -m src.data.fetch_recent_results_apitennis
+py -m src.data.merge_recent_results
+
+# 3) Feature engineering + model
 py -m src.features.elo
 py -m src.features.form
-py -m src.features.sets
 py -m src.features.build_features
-
-# 3) Model selection + held-out test evaluation
 py -m src.models.train_best
-
-# 4) Score every match for the UI
 py -m src.models.score_all_matches
 
-# 5) (Optional) live fixtures + odds
+# 4) Live API-Tennis side
 py -m src.data.fetch_upcoming_apitennis
 py -m src.data.fetch_odds_apitennis
+py -m src.data.fetch_player_roster
+py -m src.data.fetch_player_photos
 
-# 6) UI
+# 5) UI
 py -m streamlit run streamlit_app.py
 ```
 
@@ -98,93 +115,143 @@ py -m streamlit run streamlit_app.py
 
 ## API-Tennis configuration
 
-The Upcoming and Players (live photo) views are powered by
-[api-tennis.com](https://api-tennis.com). To enable them:
+The Upcoming, live ticker, head-to-head card, player photos and recent
+results merge are all powered by [api-tennis.com](https://api-tennis.com).
+To enable them locally:
 
 ```bash
 cp .env.example .env
-# then edit .env and set:
+# then edit .env:
 #   API_TENNIS_KEY=<your-key>
 ```
 
-The repository does not commit `.env` (it's listed in `.gitignore`). All API responses are
-cached on disk under `data/cache/api_tennis/` to respect the provider's rate limits — the
-TTL is configurable via `API_TENNIS_CACHE_TTL_S` (fixtures) and
-`API_TENNIS_ODDS_CACHE_TTL_S` (odds) in `.env`.
+The `.env` file is in `.gitignore`. All API responses are cached on disk
+under `data/cache/api_tennis/` to respect provider rate limits — TTL is
+configurable via `API_TENNIS_CACHE_TTL_S` and
+`API_TENNIS_ODDS_CACHE_TTL_S` in `.env`.
 
-When a key is configured, the Streamlit UI shows a "Refresh fixtures from API" button in
-the Upcoming view. Otherwise the view degrades gracefully to a labelled demo dataset
-synthesized from recent active players.
+For the deployed app, set `API_TENNIS_KEY` as a GitHub repository secret
+(Settings → Secrets and variables → Actions). The daily refresh workflow
+uses it to pull live data automatically.
+
+---
+
+## Streamlit console
+
+Six views, every player + tournament name is a click-through to its
+profile:
+
+1. **Matches Explorer** — every historical match scored with the AI's
+   probability + a green/red row tint showing whether the AI was right.
+   The "Confidence" column shows the market-aware blend by default.
+2. **Upcoming** — live API-Tennis fixtures grouped by day → tournament,
+   sorted by time. **LIVE** pill on matches currently in progress
+   (red, animated). **FINAL** card with score + winner chip on matches
+   that have finished today. Doubles + qualifying-tier matches are
+   filtered out at fetch time.
+3. **Players** — searchable + flag-tagged roster sorted active-first by
+   win-rate. Profile cards include API-Tennis country flag, age, photo,
+   Elo trajectory chart, surface breakdown, head-to-head jumps and an
+   inlined "next match" card if the player has an upcoming fixture.
+4. **Tournaments** — round-clustered cards (Final → Semifinals → R128),
+   each match rendered with player photos, country flags and the final
+   score.
+5. **What-if** — pick any two players + surface + date and the model
+   returns the probability split, with a head-to-head card and a
+   **"Why this prediction" tale-of-the-tape** breakdown showing every
+   relevant feature side-by-side.
+6. **Leaderboard** — ranked cards (rank chip, photo, flag, full name,
+   country) sortable by Win rate / Last 30d WR / AI accuracy on this
+   player's matches / current streak / best surface.
+
+A horizontal **live ticker** is pinned just under the top nav — every
+match in progress scrolls past with player photos + the current set
+score. Pauses on hover.
+
+The top-right **ℹ️ About** dialog exposes data sources, the trained
+model name + accuracy + log-loss, the current blend α, and the
+no-leakage guarantee in plain language.
+
+---
+
+## Auto-refresh (GitHub Actions)
+
+[`.github/workflows/daily-refresh.yml`](./.github/workflows/daily-refresh.yml)
+runs every day at 04:00 UTC (manually triggerable from the Actions tab).
+It:
+
+1. Fetches the latest tennis-data.co.uk archive
+2. Cleans + supplements with API-Tennis recent results (with the
+   tour-level filter)
+3. Rebuilds features, retrains the model, re-scores every match
+4. Refreshes live fixtures, ATP roster + player photos
+5. Commits the refreshed artifacts (predictions CSV, player metadata
+   cache, model PKL, metrics.json, ~400 player photos per night) back
+   to the repo so the deployed app stays fresh
+
+`.gitignore` is written so the large source CSVs stay untracked but the
+six artifacts the deployed app actually serves are tracked:
+
+```
+data/processed/all_predictions.csv
+data/processed/fixtures_upcoming.csv
+data/processed/recent_results_apitennis.csv
+data/processed/matches_clean.csv
+data/cache/player_meta.json
+models/{logreg_final.pkl, imputer_final.pkl, feature_columns.txt, metrics.json}
+```
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────┐    ┌────────────────────────┐    ┌─────────────────────┐
-│ tennis-data.co.uk        │    │ api-tennis.com         │    │ models/             │
-│ historical Excel files   │    │ live fixtures + odds   │    │ logreg_final.pkl    │
-└────────────┬─────────────┘    └────────────┬───────────┘    │ imputer_final.pkl   │
-             │                               │                │ feature_columns.txt │
-             ▼                               ▼                │ metrics.json        │
-┌──────────────────────────┐    ┌────────────────────────┐    └─────────────────────┘
-│ src/data/                │    │ src/integrations/      │              ▲
-│   fetch_data → CSV       │    │   api_tennis (cache)   │              │
-│   preprocess → schema    │    │   surface inference    │              │
-│   cleaning → matches     │    │   consensus odds       │              │
-└────────────┬─────────────┘    └────────────┬───────────┘              │
-             ▼                               ▼                          │
-┌──────────────────────────┐    ┌────────────────────────┐              │
-│ src/features/            │    │ data/processed/        │              │
-│   elo, form, sets        │──▶│  fixtures_upcoming.csv │              │
-│   build_features → X     │    │  matches_*.csv          │              │
-└────────────┬─────────────┘    │  train_dataset.csv     │              │
-             ▼                  │  all_predictions.csv   │              │
-┌──────────────────────────┐    └────────────┬───────────┘              │
-│ src/models/              │                 │                          │
-│   train_best → model     │─────────────────┴──────────────────────────┘
-│   score_all_matches      │
-└────────────┬─────────────┘
-             ▼
-┌──────────────────────────┐
-│ streamlit_app.py         │  ← English-only console
-│  6 views, click-through  │
-│  player / tournament nav │
-└──────────────────────────┘
+┌──────────────────────────┐    ┌────────────────────────┐
+│ tennis-data.co.uk        │    │ api-tennis.com         │
+│ historical Excel files   │    │ live fixtures + odds + │
+│ (2000 → today)           │    │ get_h2h + livescore +  │
+│                          │    │ standings + photos     │
+└────────────┬─────────────┘    └────────────┬───────────┘
+             │                               │
+             ▼                               ▼
+┌──────────────────────────┐    ┌────────────────────────┐
+│ src/data/                │    │ src/integrations/      │
+│   fetch_data → CSV       │    │   api_tennis (cache +  │
+│   preprocess             │    │   chunked windows)     │
+│   cleaning               │    │ src/utils/             │
+│   fetch_recent_results   │    │   player_meta          │
+│   merge_recent_results   │    │   country (flag emoji) │
+└────────────┬─────────────┘    │   surface inference    │
+             ▼                  └────────────┬───────────┘
+┌──────────────────────────┐                 │
+│ src/features/            │                 │
+│   elo (538-style MoV +   │                 │
+│        dynamic K + tier) │                 │
+│   form (+ momentum +     │                 │
+│         weighted form)   │                 │
+│   build_features         │                 │
+│     ├─ H2H (+surface)    │                 │
+│     ├─ common opponent   │                 │
+│     ├─ tiebreak / set    │                 │
+│     └─ tier / round      │                 │
+└────────────┬─────────────┘                 │
+             ▼                               │
+┌──────────────────────────┐    ┌────────────────────────┐
+│ src/models/              │    │ data/processed/        │
+│   train_best (LR + HGB + │    │   all_predictions.csv  │
+│   LightGBM + Ensemble +  │    │   fixtures_upcoming.csv│
+│   calibration)           │    │   recent_results_*.csv │
+│   score_all_matches      │    └────────────┬───────────┘
+│     + per-year α blend   │                 │
+└────────────┬─────────────┘                 │
+             ▼                               ▼
+┌────────────────────────────────────────────────────────┐
+│                  streamlit_app.py                       │
+│   nav · hero · KPIs · live ticker · About dialog        │
+│   Matches · Upcoming · Players · Tournaments ·          │
+│   What-if · Leaderboard                                 │
+└────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Modelling: leakage-safe by design
-
-The most common pitfall in tennis forecasting is letting bookmaker prices leak into the
-model. Predictive Serve takes a deliberate stance:
-
-- The list of **leaky market columns** (`oddsA`, `oddsB`, `pA_market`, `pB_market`,
-  `p_diff`, `logit_pA_market`, `has_market`) is centralised in
-  [`src/utils/feature_utils.py`](./src/utils/feature_utils.py) and excluded from the
-  feature set in **every** training and scoring path.
-- The "edge" displayed in the UI (model − market) therefore reflects an **independent**
-  AI signal rather than a function of the market it is being compared to.
-- A held-out test split (year ≥ 2025) is **never** consulted during model selection or
-  calibration.
-
-The training script ([`src/models/train_best.py`](./src/models/train_best.py)) writes
-[`models/metrics.json`](./models/metrics.json) with both the validation and the held-out
-test scores, so changes can be tracked across commits.
-
----
-
-## UI design
-
-- Dark slate / navy theme with high-contrast typography.
-- Sticky top navigation pill that surfaces the live model name + accuracy.
-- Six-tile KPI bar (predictions, pick accuracy, log loss, high-confidence accuracy).
-- Button-based section navigation that supports **deep linking** — every player and
-  tournament name in tables or cards can jump to a profile page.
-- Match rows in the explorer are tinted **pastel green** when the AI was correct and
-  **pastel red** when it was wrong, with bold "AI Pick" / "Result" columns for fast
-  scanning.
 
 ---
 
@@ -193,44 +260,47 @@ test scores, so changes can be tracked across commits.
 ```
 predictive-serve/
 ├─ data/
-│  ├─ raw/             # tennis-data.co.uk merged Excel files
-│  └─ processed/       # cleaned matches + feature matrix + predictions
-├─ models/             # trained model, imputer, feature list, metrics.json
-├─ assets/players/     # cached player photos (downloaded on demand)
+│  ├─ raw/             # tennis-data.co.uk merged Excel files (ignored)
+│  ├─ processed/       # cleaned matches + feature matrix + predictions
+│  └─ cache/           # API-Tennis cache + player_meta.json
+├─ models/             # trained model, imputer, features, metrics.json
+├─ assets/players/     # cached player photos (committed)
 ├─ src/
-│  ├─ data/            # fetchers, preprocess, cleaning, schema
-│  ├─ features/        # Elo, form, sets, head-to-head, market features
-│  ├─ models/          # train_best, train_logreg, score_all_matches
-│  ├─ integrations/    # API-Tennis client (cached + consensus odds)
+│  ├─ data/            # fetchers, preprocess, cleaning, merge, schema
+│  ├─ features/        # elo, form, build_features
+│  ├─ models/          # train_best, score_all_matches
+│  ├─ integrations/    # API-Tennis client
 │  ├─ predict/         # whatif single-match scoring
-│  └─ utils/           # paths, env, aliases, feature_utils, surface, avatars
-├─ streamlit_app.py    # Streamlit console
-├─ run_predictive_serve.bat   # Windows one-click launcher
-└─ requirements.txt
+│  └─ utils/           # paths, env, feature_utils, surface, player_meta
+├─ streamlit_app.py
+├─ run_predictive_serve.bat
+├─ requirements.txt
+├─ test_quick.py
+└─ .github/workflows/{ci,daily-refresh}.yml
 ```
 
 ---
 
 ## Development
 
-### Useful commands
-
 ```bash
-# Re-train and write metrics.json
-py -m src.models.train_best
-
-# Sanity check
+# Smoke test (CI runs this on every push)
 py test_quick.py
-py test_system.py
+
+# Retrain + rescore manually
+py -m src.models.train_best
+py -m src.models.score_all_matches
 ```
 
-### Roadmap
+### Roadmap (next iterations)
 
-- Player nationality / age via API-Tennis player endpoint
-- Reliability diagram and per-surface calibration plots
-- SHAP-style "why this pick" explanations on every match card
-- Filter persistence in URL query parameters
-- Optional light-mode theme
+- Modularise `streamlit_app.py` (currently a single 3k+ line file) into
+  per-tab modules under `src/ui/`.
+- Migrate intermediate CSVs to Parquet for faster I/O and smaller disk.
+- Surface SHAP-style feature importance in the About dialog.
+- Kelly-criterion bet sizing when both an edge and a price are present.
+- WTA support (the `get_standings` endpoint already takes `event_type=WTA`).
+- Daily-digest push notification with the day's high-confidence picks.
 
 Contributions welcome — open an issue to discuss bigger changes first.
 
@@ -238,5 +308,6 @@ Contributions welcome — open an issue to discuss bigger changes first.
 
 ## License
 
-This project is intended for learning, portfolio, and research use. Tennis match results
-remain the property of their original sources (tennis-data.co.uk, api-tennis.com).
+Intended for learning, portfolio and research use. Tennis match results
+remain the property of their original sources (tennis-data.co.uk,
+api-tennis.com).

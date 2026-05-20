@@ -6,8 +6,7 @@ scikit-learn
 lightgbm>=4.0
 joblib
 streamlit
-matplotlib
-seaborn
+altair
 numpy
 scipy
 python-dotenv

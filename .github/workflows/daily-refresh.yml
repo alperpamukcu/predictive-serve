@@ -58,7 +58,6 @@ jobs:
         run: |
           python -m src.features.elo
           python -m src.features.form
-          python -m src.features.sets || true
           python -m src.features.build_features
 
       - name: Train model + score every match

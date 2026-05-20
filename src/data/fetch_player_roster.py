@@ -30,7 +30,7 @@ from src.utils.player_meta import (
 
 
 def _history_names() -> list[str]:
-    p = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
+    p = PROCESSED_DIR / "matches_with_elo_form.csv"
     if not p.exists():
         return []
     df = pd.read_csv(p, usecols=["playerA", "playerB"], low_memory=False).dropna()

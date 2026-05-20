@@ -31,6 +31,14 @@ tiebreak_winrateB
 tiebreak_winrate_diff
 tiebreak_playedA
 tiebreak_playedB
+set_winrateA
+set_winrateB
+set_winrate_diff
+sets_playedA
+sets_playedB
+deciding_winrateA
+deciding_winrateB
+deciding_winrate_diff
 days_since_lastA_clipped
 days_since_lastB_clipped
 days_since_last_diff_clipped

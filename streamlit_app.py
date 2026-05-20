@@ -799,7 +799,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 # =============================================================================
 
 PRED_PATH = PROCESSED_DIR / "all_predictions.csv"
-HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
+HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form.csv"
 FIXTURES_PATH = PROCESSED_DIR / "fixtures_upcoming.csv"
 METRICS_PATH = MODELS_DIR / "metrics.json"
 MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
@@ -1480,18 +1480,6 @@ def render_tale_of_tape(row_df: pd.DataFrame, name_a: str, name_b: str) -> None:
     )
 
 
-def _live_for_player(player: str, livescores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    target = canonical_parts(player)
-    for ev in livescores:
-        for nf in ("event_first_player", "event_second_player"):
-            api_name = (ev.get(nf) or "").strip()
-            if not api_name or is_doubles(api_name):
-                continue
-            if canonical_parts(api_name) == target:
-                return ev
-    return None
-
-
 def render_live_ticker() -> None:
     """A thin newscaster-style ticker pinned just under the top nav. Renders
     even when nothing is live so users can tell the feed is wired up."""
@@ -2083,7 +2071,12 @@ def render_kpis(df: pd.DataFrame) -> None:
 
     sub = sub.sort_values("date")
     y = sub["y"].astype(int).values
-    p = sub["p_model"].astype(float).values
+    # Headline metrics use the market-aware blend (the real product number).
+    if "p_blend" in sub.columns:
+        blended = sub["p_blend"].where(sub["p_blend"].notna(), sub["p_model"])
+        p = blended.astype(float).values
+    else:
+        p = sub["p_model"].astype(float).values
     ll = log_loss(y, p)
     br = brier_score_loss(y, p)
     ac = accuracy_score(y, (p >= 0.5).astype(int))
@@ -2277,8 +2270,15 @@ def tab_matches(pred_df: pd.DataFrame) -> None:
     if sel_surfaces:
         df = df[df["surface"].isin(sel_surfaces)]
     df = df.dropna(subset=["p_model"])
-    df["winner_prob"] = np.where(df["p_model"] >= 0.5, df["p_model"], 1.0 - df["p_model"])
-    df["winner_pick"] = np.where(df["p_model"] >= 0.5, df["playerA"], df["playerB"])
+    # Display the market-aware blend by default — it is the actual product
+    # number (~68% test acc vs pure model 65.6%). Falls back to p_model
+    # on rows where the bookmaker line was missing.
+    if "p_blend" in df.columns:
+        df["p_display"] = df["p_blend"].where(df["p_blend"].notna(), df["p_model"])
+    else:
+        df["p_display"] = df["p_model"]
+    df["winner_prob"] = np.where(df["p_display"] >= 0.5, df["p_display"], 1.0 - df["p_display"])
+    df["winner_pick"] = np.where(df["p_display"] >= 0.5, df["playerA"], df["playerB"])
     df = df[df["winner_prob"] >= min_conf]
     if name_filter:
         m = (
@@ -2486,8 +2486,12 @@ def _score_fixtures(fix_df: pd.DataFrame, history_df: pd.DataFrame) -> pd.DataFr
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows)
-    out["winner_prob"] = np.where(out["p_model"] >= 0.5, out["p_model"], 1.0 - out["p_model"])
-    out["winner_pick"] = np.where(out["p_model"] >= 0.5, out["playerA"], out["playerB"])
+    # For live fixtures we don't have bookmaker lines, so the displayed
+    # probability is the pure model output. (If odds were fetched, the
+    # caller can still apply blend_alpha afterwards.)
+    out["p_display"] = out["p_model"]
+    out["winner_prob"] = np.where(out["p_display"] >= 0.5, out["p_display"], 1.0 - out["p_display"])
+    out["winner_pick"] = np.where(out["p_display"] >= 0.5, out["playerA"], out["playerB"])
     return out
 
 

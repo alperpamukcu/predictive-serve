@@ -15,7 +15,7 @@ from src.utils.config import PROCESSED_DIR, MODELS_DIR
 from src.utils.feature_utils import load_feature_list
 
 
-HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
+HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form.csv"
 FEATURE_LIST_PATH = MODELS_DIR / "feature_columns.txt"
 MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
 IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
@@ -36,6 +36,9 @@ class PlayerSnapshot:
     form_weighted: float = float("nan")
     tiebreak_winrate: float = float("nan")
     tiebreak_played: float = float("nan")
+    set_winrate: float = float("nan")
+    sets_played: float = float("nan")
+    deciding_winrate: float = float("nan")
 def map_round_importance(round_code: Optional[str]) -> Tuple[float, int, int, int]:
     """build_features.py ile uyumlu round feature'ları döner."""
     if not round_code:

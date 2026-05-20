@@ -25,8 +25,8 @@ def test_basic() -> bool:
         )
         from src.utils.surface import guess_surface_from_tournament
         from src.data import cleaning, fetch_data, preprocess, schema  # noqa: F401
-        from src.features import build_features, elo, form, sets  # noqa: F401
-        from src.models import score_all_matches, train_best, train_logreg  # noqa: F401
+        from src.features import build_features, elo, form  # noqa: F401
+        from src.models import score_all_matches, train_best  # noqa: F401
         from src.integrations.api_tennis import (
             ApiTennisConfig,
             consensus_decimal_moneyline,

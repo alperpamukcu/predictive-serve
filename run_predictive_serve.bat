@@ -107,10 +107,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-rem Best-effort set-based features (do not fail pipeline if this step fails)
-py -m src.features.sets
-echo [INFO] Set-based features step finished (best effort).
-
 py -m src.features.build_features
 if %errorlevel% neq 0 (
     echo.
@@ -151,11 +147,7 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [INFO] Downloading player images (API-Tennis logos, optional) ...
-py -m src.data.fetch_player_images_apitennis
-if %errorlevel% neq 0 (
-    echo [WARN] Player image download failed. UI will still work without images.
-)
+rem (Player image download is now part of the ATP roster sync below.)
 
 echo.
 echo [INFO] Syncing ATP roster + photos (API-Tennis) ...

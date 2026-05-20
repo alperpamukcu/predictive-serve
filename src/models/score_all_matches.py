@@ -99,11 +99,36 @@ def main() -> None:
         alpha = _fit_blend_alpha(p_model[val_mask], p_market[val_mask], y[val_mask])
     else:
         alpha = 1.0
-    print(f"[score_all] Market-prior blend alpha = {alpha:.3f} "
+    print(f"[score_all] Market-prior blend alpha (global) = {alpha:.3f} "
           f"({int(val_mask.sum())} val rows used)")
 
-    # p_blend: only when market exists; otherwise fall back to pure model
-    p_blend_full = np.where(np.isfinite(p_market), alpha * p_model + (1 - alpha) * p_market, p_model)
+    # P1.3: per-year alpha so the blend tracks market drift across seasons.
+    # Fit alpha on each (2022, 2023, 2024) slice; for years without enough
+    # samples fall back to the global alpha.
+    per_year_alpha: Dict[int, float] = {}
+    for year in (TRAIN_END_YEAR, TRAIN_END_YEAR + 1, TRAIN_END_YEAR + 2):
+        mask = (yr == year) & np.isfinite(p_market)
+        if mask.sum() >= 500:
+            per_year_alpha[year] = _fit_blend_alpha(p_model[mask], p_market[mask], y[mask])
+        else:
+            per_year_alpha[year] = alpha
+    # Test seasons (2025+) and live predictions use the most recent val
+    # year's alpha — that's the best-calibrated coefficient we have.
+    latest_val_year = max(per_year_alpha)
+    print(f"[score_all] per-year alphas: {per_year_alpha} "
+          f"(2025+/live use {latest_val_year}'s alpha = {per_year_alpha[latest_val_year]:.3f})")
+
+    def _alpha_for(year: int) -> float:
+        if year in per_year_alpha:
+            return per_year_alpha[year]
+        return per_year_alpha[latest_val_year]
+
+    alphas = np.array([_alpha_for(int(y_)) for y_ in yr])
+    p_blend_full = np.where(
+        np.isfinite(p_market),
+        alphas * p_model + (1 - alphas) * p_market,
+        p_model,
+    )
     p_blend_full = np.clip(p_blend_full, 1e-7, 1 - 1e-7)
 
     meta_keep = ["date", "surface", "playerA", "playerB", "y"]
@@ -154,6 +179,7 @@ def main() -> None:
             metrics = {}
     metrics["blend"] = {
         "alpha": alpha,
+        "per_year_alpha": per_year_alpha,
         "val": val_report,
         "test": test_report,
     }

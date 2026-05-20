@@ -8,8 +8,10 @@ import pandas as pd
 
 from src.utils.config import PROCESSED_DIR
 
-# Artık set feature'ları da içeren dosyadan okuyacağız:
-INPUT_PATH = PROCESSED_DIR / "matches_with_elo_form_sets.csv"
+# Read directly from the form output. sets.py was removed (it shipped
+# nothing in our pipeline — W1..W5 columns are dropped at cleaning).
+# Set + tiebreak features are now built here from the `score` string.
+INPUT_PATH = PROCESSED_DIR / "matches_with_elo_form.csv"
 OUTPUT_PATH = PROCESSED_DIR / "train_dataset.csv"
 
 
@@ -234,6 +236,103 @@ def add_common_opponent_features(df: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------------------------------------------------
 import re as _re
 
+
+# ----------------------------------------------------------------------
+# 1d) SET-LEVEL FEATURES — Phase P1.2
+# The old sets.py looked for W1..W5 columns that we drop in cleaning, so
+# it shipped nothing. Parse the `score` string here instead. For each
+# player we track:
+#   set_winrateA/B   : career set winrate going into the match
+#   sets_playedA/B   : career set count
+#   deciding_winrateA/B : winrate in deciding sets (3rd of BO3, 5th of BO5)
+# ----------------------------------------------------------------------
+
+def add_set_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "score" not in df.columns or "playerA" not in df.columns:
+        return df
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # per player: [sets_won, sets_played, deciders_won, deciders_played]
+    stats: Dict[str, List[int]] = {}
+
+    n = len(df)
+    swA = np.full(n, np.nan, dtype=float)
+    swB = np.full(n, np.nan, dtype=float)
+    spA = np.zeros(n, dtype=np.int32)
+    spB = np.zeros(n, dtype=np.int32)
+    decA = np.full(n, np.nan, dtype=float)
+    decB = np.full(n, np.nan, dtype=float)
+
+    pa_col = df["playerA"].astype(str).values
+    pb_col = df["playerB"].astype(str).values
+    sc_col = df["score"].astype(str).values
+
+    for i in range(n):
+        a = pa_col[i]
+        b = pb_col[i]
+        sa = stats.get(a, [0, 0, 0, 0])
+        sb = stats.get(b, [0, 0, 0, 0])
+        if sa[1] > 0:
+            swA[i] = sa[0] / sa[1]
+            spA[i] = sa[1]
+        if sb[1] > 0:
+            swB[i] = sb[0] / sb[1]
+            spB[i] = sb[1]
+        if sa[3] > 0:
+            decA[i] = sa[2] / sa[3]
+        if sb[3] > 0:
+            decB[i] = sb[2] / sb[3]
+
+        # Update with this match's sets. matches_clean stores winner's
+        # games first, so a "set" entry "x-y" with x > y means winner
+        # took that set.
+        score = sc_col[i]
+        if not isinstance(score, str):
+            continue
+        chunks = score.split()
+        n_sets = 0
+        winner_sets = []
+        for chunk in chunks:
+            m = _re.match(r"(\d+)\D+(\d+)", chunk.strip())
+            if not m:
+                continue
+            wg, lg = int(m.group(1)), int(m.group(2))
+            if wg > lg:
+                winner_sets.append(1)
+            else:
+                winner_sets.append(0)
+            n_sets += 1
+        if not n_sets:
+            continue
+        a_sets_won = sum(winner_sets)              # a is winner of match
+        b_sets_won = n_sets - a_sets_won
+        stats.setdefault(a, [0, 0, 0, 0])
+        stats[a][0] += a_sets_won
+        stats[a][1] += n_sets
+        stats.setdefault(b, [0, 0, 0, 0])
+        stats[b][0] += b_sets_won
+        stats[b][1] += n_sets
+
+        # Deciding set bookkeeping: a "decider" is any set after at least
+        # one set apiece (3rd of BO3, 5th of BO5). Both players play it.
+        if n_sets >= 3:
+            decider_a = winner_sets[-1]            # a is match winner -> won decider
+            decider_b = 1 - decider_a
+            stats[a][2] += decider_a
+            stats[a][3] += 1
+            stats[b][2] += decider_b
+            stats[b][3] += 1
+
+    df["set_winrateA"] = swA
+    df["set_winrateB"] = swB
+    df["sets_playedA"] = spA
+    df["sets_playedB"] = spB
+    df["deciding_winrateA"] = decA
+    df["deciding_winrateB"] = decB
+    return df
+
+
 def add_tiebreak_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "score" not in df.columns or "playerA" not in df.columns:
@@ -376,32 +475,58 @@ def map_series_tier(series_value: str) -> float:
     return 1.0
 
 
+_GS_NAMES = ("australian open", "french open", "roland garros", "wimbledon", "us open")
+_MASTERS_NAMES = (
+    "indian wells", "miami", "monte carlo", "monte-carlo", "madrid",
+    "rome", "internazionali", "canada", "canadian open", "national bank",
+    "rogers", "cincinnati", "shanghai", "paris masters", "bercy",
+)
+_TOUR_FINALS = ("atp finals", "tour finals", "masters cup", "nitto")
+_500_NAMES = (
+    "rotterdam", "dubai", "acapulco", "barcelona", "queens", "queen's",
+    "halle", "hamburg", "washington", "beijing", "tokyo", "vienna",
+    "basel", "atp 500",
+)
+
+
+def _tier_from_tourney(tourney: object) -> Tuple[float, int, int]:
+    """Derive (series_tier_score, is_grand_slam, is_bo5_match) directly
+    from the tournament name — replaces the stale Series-column reader."""
+    if not isinstance(tourney, str):
+        return 1.0, 0, 0
+    t = tourney.lower()
+    if any(k in t for k in _GS_NAMES):
+        return 4.0, 1, 1
+    if any(k in t for k in _TOUR_FINALS):
+        return 3.5, 0, 0
+    if any(k in t for k in _MASTERS_NAMES) or "masters" in t or "1000" in t:
+        return 3.0, 0, 0
+    if any(k in t for k in _500_NAMES) or "500" in t:
+        return 2.0, 0, 0
+    if "challenger" in t:
+        return 0.8, 0, 0
+    if "future" in t:
+        return 0.5, 0, 0
+    if "atp 250" in t or "international" in t or "world tour" in t:
+        return 1.5, 0, 0
+    return 1.5, 0, 0  # default = ATP 250 tier
+
+
 def add_series_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Turnuva seviyesi ile ilgili feature'lar:
-
-      - series_tier: Series string'inden türetilmiş numeric skor
-      - is_grand_slam: Grand Slam turnuvaları için 1
-      - is_bo5_match: inferred_best_of == 5 ise 1
+    Turnuva seviyesi feature'ları, tamamen tourney name'den türetilir:
+      - series_tier   : 0.5 (futures) .. 4.0 (grand slam)
+      - is_grand_slam : 1/0
+      - is_bo5_match  : 1 for Grand Slams (formerly hardcoded 0 because
+                        the old sets.py inferred_best_of pipeline was
+                        broken — now correctly toggled on for GS).
     """
     df = df.copy()
-
-    series_col = _find_column(df, ["Series", "series"])
-    if series_col is not None:
-        series_raw = df[series_col].astype(str)
-        df["series_tier"] = series_raw.apply(map_series_tier)
-        df["is_grand_slam"] = series_raw.str.contains("Grand Slam", case=False, na=False).astype(int)
-    else:
-        print("[series] Series kolonu bulunamadı, varsayılan series_tier/is_grand_slam kullanılacak.")
-        df["series_tier"] = 1.0
-        df["is_grand_slam"] = 0
-
-    # sets.py tarafından eklenen inferred_best_of varsa, bunu da kullan
-    if "inferred_best_of" in df.columns:
-        df["is_bo5_match"] = (df["inferred_best_of"] == 5).astype(int)
-    else:
-        df["is_bo5_match"] = 0
-
+    tier_col = df.get("tourney", df.get("tournament", pd.Series("", index=df.index)))
+    tier_vals = tier_col.apply(_tier_from_tourney)
+    df["series_tier"] = tier_vals.apply(lambda t: t[0]).astype(float)
+    df["is_grand_slam"] = tier_vals.apply(lambda t: t[1]).astype(int)
+    df["is_bo5_match"] = tier_vals.apply(lambda t: t[2]).astype(int)
     return df
 
 
@@ -437,6 +562,9 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("co_winrateA", "co_winrateB"),
         ("tiebreak_winrateA", "tiebreak_winrateB"),
         ("tiebreak_playedA", "tiebreak_playedB"),
+        ("set_winrateA", "set_winrateB"),
+        ("sets_playedA", "sets_playedB"),
+        ("deciding_winrateA", "deciding_winrateB"),
         ("form_winrateA_5", "form_winrateB_5"),
         ("form_winrateA_10", "form_winrateB_10"),
         ("days_since_lastA", "days_since_lastB"),
@@ -543,6 +671,10 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
         df["co_winrate_diff"] = df["co_winrateA"] - df["co_winrateB"]
     if "tiebreak_winrateA" in df.columns and "tiebreak_winrateB" in df.columns:
         df["tiebreak_winrate_diff"] = df["tiebreak_winrateA"] - df["tiebreak_winrateB"]
+    if "set_winrateA" in df.columns and "set_winrateB" in df.columns:
+        df["set_winrate_diff"] = df["set_winrateA"] - df["set_winrateB"]
+    if "deciding_winrateA" in df.columns and "deciding_winrateB" in df.columns:
+        df["deciding_winrate_diff"] = df["deciding_winrateA"] - df["deciding_winrateB"]
 
     # Form
     if "form_winrateA_5" in df.columns and "form_winrateB_5" in df.columns:
@@ -591,7 +723,7 @@ def build_feature_dataset(
     if not input_path.exists():
         raise FileNotFoundError(f"Girdi dosyası bulunamadı: {input_path}")
 
-    print(f"[features] Reading matches_with_elo_form_sets from: {input_path}")
+    print(f"[features] Reading matches_with_elo_form from: {input_path}")
     df = pd.read_csv(input_path, low_memory=False)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
@@ -609,9 +741,11 @@ def build_feature_dataset(
     # 1) H2H feature'ları (playerA = winner, playerB = loser aşamasında)
     df = add_h2h_features(df)
 
-    # 1b) Common-opponent + tiebreak (must run BEFORE flip; A is winner here)
+    # 1b) Common-opponent + tiebreak + set features (must run BEFORE flip;
+    #     A is the match winner at this stage).
     df = add_common_opponent_features(df)
     df = add_tiebreak_features(df)
+    df = add_set_features(df)
 
     # 2) Surface one-hot feature'lar
     surface_dummies = pd.get_dummies(df["surface"], prefix="surface")
@@ -647,6 +781,10 @@ def build_feature_dataset(
         # Tiebreak skill
         "tiebreak_winrateA", "tiebreak_winrateB", "tiebreak_winrate_diff",
         "tiebreak_playedA", "tiebreak_playedB",
+        # Set-level performance (replaces the dead sets.py output)
+        "set_winrateA", "set_winrateB", "set_winrate_diff",
+        "sets_playedA", "sets_playedB",
+        "deciding_winrateA", "deciding_winrateB", "deciding_winrate_diff",
         # Dinlenme / yoğunluk
         "days_since_lastA_clipped", "days_since_lastB_clipped", "days_since_last_diff_clipped",
         "matches_last30A", "matches_last30B", "matches_last30_diff",
@@ -698,6 +836,17 @@ def build_feature_dataset(
         f"[features] Saved training dataset to: {output_path} "
         f"(rows={len(df_out)}, features={len(feature_cols)})"
     )
+
+    # Cleanup intermediates — keep only matches_clean.csv (needed for live
+    # name resolution) + train_dataset.csv (training input). The elo+form
+    # rollups are regenerable from matches_clean in seconds.
+    for stale in ("matches_with_elo.csv",):
+        p = PROCESSED_DIR / stale
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
     return output_path
 
 

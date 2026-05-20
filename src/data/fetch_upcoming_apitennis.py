@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from src.integrations.api_tennis import ApiTennisConfig, get_fixtures
-from src.utils.aliases import load_aliases
 from src.utils.config import PROCESSED_DIR, PROJECT_ROOT
 from src.utils.env import getenv, getenv_int, try_load_dotenv
 from src.utils.surface import guess_surface_from_tournament
@@ -117,10 +116,8 @@ def main() -> int:
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "playerA", "playerB", "surface"])
 
-    aliases = load_aliases()
-    df["playerA"] = df["playerA"].map(aliases.map_player)
-    df["playerB"] = df["playerB"].map(aliases.map_player)
-    df["tournament"] = df["tournament"].map(aliases.map_tournament)
+    # Name resolution against the historical roster happens downstream in
+    # merge_recent_results.py via canonical_parts; nothing to apply here.
 
     df = df.drop_duplicates(subset=["match_id", "date", "playerA", "playerB"], keep="first")
     df = df.sort_values(["date", "tournament", "playerA", "playerB"])
