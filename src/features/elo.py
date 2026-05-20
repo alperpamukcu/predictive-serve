@@ -59,6 +59,43 @@ def _parse_games(score: object) -> Tuple[Optional[int], Optional[int]]:
     return wg, lg
 
 
+# --- Tier-specific Elo (Grand Slams + Masters 1000) ----------------------
+_BIG_KEYWORDS = (
+    "australian open",
+    "french open",
+    "roland garros",
+    "wimbledon",
+    "us open",
+    "indian wells",
+    "miami",
+    "monte carlo",
+    "monte-carlo",
+    "madrid",
+    "rome",
+    "internazionali",
+    "canada",
+    "canadian open",
+    "national bank",
+    "rogers",
+    "cincinnati",
+    "shanghai",
+    "paris masters",
+    "bercy",
+    "atp finals",
+    "tour finals",
+    "nitto",
+)
+
+
+def is_big_tournament(name: object) -> bool:
+    """True for Grand Slams + ATP Masters 1000 + ATP Finals — the matches
+    that decide season titles and produce the strongest skill signal."""
+    if not isinstance(name, str):
+        return False
+    s = name.lower()
+    return any(k in s for k in _BIG_KEYWORDS)
+
+
 def mov_multiplier(score: object) -> float:
     """Margin-of-victory multiplier in roughly [0.80, 1.35].
     A 12-3 straight-sets win weighs ~1.35x; a 20-18 marathon ~0.90x."""
@@ -107,6 +144,9 @@ def compute_elo_for_matches(
     # Match counts drive the dynamic K-factor schedule.
     match_count: Dict[str, int] = defaultdict(int)
     match_count_surf: Dict[Tuple[str, str], int] = defaultdict(int)
+    # Tier-specific Elo: only updates on Grand Slams + Masters 1000.
+    big_ratings: Dict[str, float] = defaultdict(lambda: base_elo)
+    match_count_big: Dict[str, int] = defaultdict(int)
 
     eloA_list = []
     eloB_list = []
@@ -114,6 +154,8 @@ def compute_elo_for_matches(
     elo_surfaceB_list = []
     elo_momentumA_list = []
     elo_momentumB_list = []
+    elo_bigA_list = []
+    elo_bigB_list = []
 
     def _momentum(player: str, current: float) -> float:
         """Current Elo minus the Elo recorded ~5 matches ago. 0 if too new."""
@@ -142,6 +184,8 @@ def compute_elo_for_matches(
         elo_surfaceB_list.append(rB_surf)
         elo_momentumA_list.append(_momentum(playerA, rA))
         elo_momentumB_list.append(_momentum(playerB, rB))
+        elo_bigA_list.append(big_ratings[playerA])
+        elo_bigB_list.append(big_ratings[playerB])
 
         # playerA her zaman kazanan. Margin-of-victory ağırlığı + dinamik K.
         mov = mov_multiplier(row.get("score"))
@@ -162,6 +206,19 @@ def compute_elo_for_matches(
         surface_ratings[keyA_surf] = rA_surf + kA_s * delta_s
         surface_ratings[keyB_surf] = rB_surf - kB_s * delta_s
 
+        # --- Tier-specific Elo (only on Grand Slams + Masters 1000) ---
+        if is_big_tournament(row.get("tourney")):
+            rA_big = big_ratings[playerA]
+            rB_big = big_ratings[playerB]
+            expA_big = expected_score(rA_big, rB_big)
+            kA_b = dynamic_k(match_count_big[playerA], floor=k_surface - 6.0)
+            kB_b = dynamic_k(match_count_big[playerB], floor=k_surface - 6.0)
+            delta_b = mov * (1.0 - expA_big)
+            big_ratings[playerA] = rA_big + kA_b * delta_b
+            big_ratings[playerB] = rB_big - kB_b * delta_b
+            match_count_big[playerA] += 1
+            match_count_big[playerB] += 1
+
         # Bookkeeping
         match_count[playerA] += 1
         match_count[playerB] += 1
@@ -179,6 +236,8 @@ def compute_elo_for_matches(
     df["elo_surfaceB"] = elo_surfaceB_list
     df["elo_momentumA"] = elo_momentumA_list
     df["elo_momentumB"] = elo_momentumB_list
+    df["elo_bigA"] = elo_bigA_list
+    df["elo_bigB"] = elo_bigB_list
 
     return df
 

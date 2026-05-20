@@ -173,6 +173,130 @@ def add_h2h_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------
+# 1b) COMMON-OPPONENT FEATURES
+# Captures the "transitive" signal — if A beat C and B lost to C, that
+# tells us something about A vs B even if they've never met. For each
+# match we compute A's and B's win rate against the players BOTH have
+# already faced before the match date.
+# ----------------------------------------------------------------------
+def add_common_opponent_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "date" not in df.columns or "playerA" not in df.columns or "playerB" not in df.columns:
+        return df
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # per-player: {opponent_name: [wins, losses]}
+    history: Dict[str, Dict[str, List[int]]] = {}
+
+    n = len(df)
+    co_count = np.zeros(n, dtype=np.int32)
+    co_winrateA = np.full(n, np.nan, dtype=float)
+    co_winrateB = np.full(n, np.nan, dtype=float)
+
+    playersA = df["playerA"].astype(str).values
+    playersB = df["playerB"].astype(str).values
+
+    for i in range(n):
+        a = playersA[i]
+        b = playersB[i]
+        a_hist = history.get(a, {})
+        b_hist = history.get(b, {})
+        common = set(a_hist.keys()) & set(b_hist.keys())
+        common.discard(a)
+        common.discard(b)
+
+        if common:
+            a_w = sum(a_hist[c][0] for c in common)
+            a_l = sum(a_hist[c][1] for c in common)
+            b_w = sum(b_hist[c][0] for c in common)
+            b_l = sum(b_hist[c][1] for c in common)
+            co_count[i] = len(common)
+            if a_w + a_l > 0:
+                co_winrateA[i] = a_w / (a_w + a_l)
+            if b_w + b_l > 0:
+                co_winrateB[i] = b_w / (b_w + b_l)
+
+        # Update — A beat B
+        history.setdefault(a, {}).setdefault(b, [0, 0])[0] += 1
+        history.setdefault(b, {}).setdefault(a, [0, 0])[1] += 1
+
+    df["co_count"] = co_count
+    df["co_winrateA"] = co_winrateA
+    df["co_winrateB"] = co_winrateB
+    return df
+
+
+# ----------------------------------------------------------------------
+# 1c) TIEBREAK WIN RATE
+# Tiebreaks are skill markers that don't show up in raw set count. We
+# parse the score string (winner first), flag 7-6/6-7 sets as tiebreaks,
+# and track each player's career tiebreak win rate going into the match.
+# ----------------------------------------------------------------------
+import re as _re
+
+def add_tiebreak_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "score" not in df.columns or "playerA" not in df.columns:
+        return df
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # per-player: [tiebreaks_won, tiebreaks_played]
+    tb_stats: Dict[str, List[int]] = {}
+
+    n = len(df)
+    tbA_rate = np.full(n, np.nan, dtype=float)
+    tbB_rate = np.full(n, np.nan, dtype=float)
+    tbA_n = np.zeros(n, dtype=np.int32)
+    tbB_n = np.zeros(n, dtype=np.int32)
+
+    playersA = df["playerA"].astype(str).values
+    playersB = df["playerB"].astype(str).values
+    scores = df["score"].astype(str).values
+
+    for i in range(n):
+        a = playersA[i]
+        b = playersB[i]
+
+        # Look up running stats BEFORE the match
+        sA = tb_stats.get(a, [0, 0])
+        sB = tb_stats.get(b, [0, 0])
+        if sA[1] > 0:
+            tbA_rate[i] = sA[0] / sA[1]
+            tbA_n[i] = sA[1]
+        if sB[1] > 0:
+            tbB_rate[i] = sB[0] / sB[1]
+            tbB_n[i] = sB[1]
+
+        # Then update with this match's tiebreaks. matches_clean stores
+        # winner's games first, so a "7-6" set means winner took the TB,
+        # a "6-7" set means winner LOST the TB but still won the match.
+        score = scores[i]
+        if not isinstance(score, str):
+            continue
+        for chunk in score.split():
+            m = _re.match(r"(\d+)\D+(\d+)", chunk.strip())
+            if not m:
+                continue
+            wg, lg = int(m.group(1)), int(m.group(2))
+            if wg == 7 and lg == 6:
+                tb_stats.setdefault(a, [0, 0])
+                tb_stats[a][0] += 1; tb_stats[a][1] += 1
+                tb_stats.setdefault(b, [0, 0])
+                tb_stats[b][1] += 1
+            elif wg == 6 and lg == 7:
+                tb_stats.setdefault(b, [0, 0])
+                tb_stats[b][0] += 1; tb_stats[b][1] += 1
+                tb_stats.setdefault(a, [0, 0])
+                tb_stats[a][1] += 1
+
+    df["tiebreak_winrateA"] = tbA_rate
+    df["tiebreak_winrateB"] = tbB_rate
+    df["tiebreak_playedA"] = tbA_n
+    df["tiebreak_playedB"] = tbB_n
+    return df
+
+
+# ----------------------------------------------------------------------
 # 2) ROUND + TURNAVU SEVİYESİ FEATURE'LARI
 # ----------------------------------------------------------------------
 def add_tournament_round_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -307,7 +431,12 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("eloA", "eloB"),
         ("elo_surfaceA", "elo_surfaceB"),
         ("elo_momentumA", "elo_momentumB"),
+        ("elo_bigA", "elo_bigB"),
         ("win_streakA", "win_streakB"),
+        ("form_winrateA_weighted", "form_winrateB_weighted"),
+        ("co_winrateA", "co_winrateB"),
+        ("tiebreak_winrateA", "tiebreak_winrateB"),
+        ("tiebreak_playedA", "tiebreak_playedB"),
         ("form_winrateA_5", "form_winrateB_5"),
         ("form_winrateA_10", "form_winrateB_10"),
         ("days_since_lastA", "days_since_lastB"),
@@ -404,8 +533,16 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
         df["elo_surface_diff"] = df["elo_surfaceA"] - df["elo_surfaceB"]
     if "elo_momentumA" in df.columns and "elo_momentumB" in df.columns:
         df["elo_momentum_diff"] = df["elo_momentumA"] - df["elo_momentumB"]
+    if "elo_bigA" in df.columns and "elo_bigB" in df.columns:
+        df["elo_big_diff"] = df["elo_bigA"] - df["elo_bigB"]
     if "win_streakA" in df.columns and "win_streakB" in df.columns:
         df["win_streak_diff"] = df["win_streakA"] - df["win_streakB"]
+    if "form_winrateA_weighted" in df.columns and "form_winrateB_weighted" in df.columns:
+        df["form_winrate_weighted_diff"] = df["form_winrateA_weighted"] - df["form_winrateB_weighted"]
+    if "co_winrateA" in df.columns and "co_winrateB" in df.columns:
+        df["co_winrate_diff"] = df["co_winrateA"] - df["co_winrateB"]
+    if "tiebreak_winrateA" in df.columns and "tiebreak_winrateB" in df.columns:
+        df["tiebreak_winrate_diff"] = df["tiebreak_winrateA"] - df["tiebreak_winrateB"]
 
     # Form
     if "form_winrateA_5" in df.columns and "form_winrateB_5" in df.columns:
@@ -472,6 +609,10 @@ def build_feature_dataset(
     # 1) H2H feature'ları (playerA = winner, playerB = loser aşamasında)
     df = add_h2h_features(df)
 
+    # 1b) Common-opponent + tiebreak (must run BEFORE flip; A is winner here)
+    df = add_common_opponent_features(df)
+    df = add_tiebreak_features(df)
+
     # 2) Surface one-hot feature'lar
     surface_dummies = pd.get_dummies(df["surface"], prefix="surface")
     df = pd.concat([df, surface_dummies], axis=1)
@@ -495,10 +636,17 @@ def build_feature_dataset(
         "eloA", "eloB", "elo_diff",
         "elo_surfaceA", "elo_surfaceB", "elo_surface_diff",
         "elo_momentumA", "elo_momentumB", "elo_momentum_diff",
+        "elo_bigA", "elo_bigB", "elo_big_diff",
         "win_streakA", "win_streakB", "win_streak_diff",
         # Form
         "form_winrateA_5", "form_winrateB_5", "form_winrate_diff_5",
         "form_winrateA_10", "form_winrateB_10", "form_winrate_diff_10",
+        "form_winrateA_weighted", "form_winrateB_weighted", "form_winrate_weighted_diff",
+        # Common opponent (transitive signal)
+        "co_count", "co_winrateA", "co_winrateB", "co_winrate_diff",
+        # Tiebreak skill
+        "tiebreak_winrateA", "tiebreak_winrateB", "tiebreak_winrate_diff",
+        "tiebreak_playedA", "tiebreak_playedB",
         # Dinlenme / yoğunluk
         "days_since_lastA_clipped", "days_since_lastB_clipped", "days_since_last_diff_clipped",
         "matches_last30A", "matches_last30B", "matches_last30_diff",

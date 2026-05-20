@@ -61,6 +61,21 @@ def compute_form_features(
     matches_last30B: List[int] = []
     win_streakA: List[int] = []
     win_streakB: List[int] = []
+    form_winrateA_weighted: List[float] = []
+    form_winrateB_weighted: List[float] = []
+
+    def _weighted_winrate(hist: Deque[int], k: int) -> float:
+        """Linear-decay weighted win rate over the last *k* matches: the
+        most recent match has the largest weight, the oldest the smallest.
+        Captures momentum better than a flat mean."""
+        if not hist:
+            return np.nan
+        vals = list(hist)[-k:]
+        if not vals:
+            return np.nan
+        n = len(vals)
+        weights = np.arange(1, n + 1, dtype=float)  # 1..n, oldest..newest
+        return float(np.dot(vals, weights) / weights.sum())
 
     def _signed_streak(hist: Deque[int]) -> int:
         """Signed streak going into the match: +N consecutive wins,
@@ -140,6 +155,8 @@ def compute_form_features(
         matches_last30B.append(mB)
         win_streakA.append(_signed_streak(histA))
         win_streakB.append(_signed_streak(histB))
+        form_winrateA_weighted.append(_weighted_winrate(histA, window_long))
+        form_winrateB_weighted.append(_weighted_winrate(histB, window_long))
 
         # Şimdi sonucu tarihle birlikte geçmişe ekleyelim
         # Bu maçta playerA kazandı, playerB kaybetti
@@ -163,6 +180,8 @@ def compute_form_features(
     df["matches_last30B"] = matches_last30B
     df["win_streakA"] = win_streakA
     df["win_streakB"] = win_streakB
+    df["form_winrateA_weighted"] = form_winrateA_weighted
+    df["form_winrateB_weighted"] = form_winrateB_weighted
 
     return df
 

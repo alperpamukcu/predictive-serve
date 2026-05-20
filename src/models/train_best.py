@@ -79,17 +79,34 @@ def _split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 def _grid_hgb() -> List[HistGradientBoostingClassifier]:
+    """Expanded grid (~20 configs) with early stopping enabled — Phase 2.3.
+    Sweeps learning rate × depth × leaves × min-samples × L2 reg. Early
+    stopping prevents the wider configs from over-training."""
     grid = []
-    for lr_, md_, mln_, msl_, l2_, it_ in [
-        (0.05, 6, 31, 50, 0.0, 400),
-        (0.05, 4, 31, 50, 0.0, 400),
-        (0.03, 6, 31, 50, 0.0, 600),
-        (0.03, 4, 31, 50, 0.0, 600),
-        (0.05, 6, 63, 50, 0.0, 400),
-        (0.03, 6, 63, 50, 0.0, 600),
-        (0.05, 6, 31, 100, 0.1, 400),
-        (0.03, 6, 31, 100, 0.1, 600),
-    ]:
+    configs = [
+        # (lr, max_depth, max_leaf_nodes, min_samples_leaf, l2, max_iter)
+        (0.05, 6, 31, 50, 0.0, 600),
+        (0.05, 4, 31, 50, 0.0, 600),
+        (0.03, 6, 31, 50, 0.0, 800),
+        (0.03, 4, 31, 50, 0.0, 800),
+        (0.02, 6, 31, 50, 0.0, 1200),
+        (0.05, 6, 63, 50, 0.0, 600),
+        (0.03, 6, 63, 50, 0.0, 800),
+        (0.05, 8, 63, 80, 0.0, 600),
+        (0.03, 8, 63, 80, 0.0, 800),
+        (0.05, 6, 31, 100, 0.1, 600),
+        (0.03, 6, 31, 100, 0.1, 800),
+        (0.05, 6, 63, 100, 0.1, 600),
+        (0.03, 6, 63, 100, 0.5, 800),
+        (0.05, 4, 31, 200, 0.5, 600),
+        (0.03, 6, 31, 200, 1.0, 800),
+        (0.02, 6, 63, 50, 0.0, 1200),
+        (0.02, 4, 31, 100, 0.1, 1200),
+        (0.07, 5, 31, 50, 0.0, 500),
+        (0.07, 6, 63, 80, 0.1, 500),
+        (0.04, 6, 47, 50, 0.05, 700),
+    ]
+    for lr_, md_, mln_, msl_, l2_, it_ in configs:
         grid.append(
             HistGradientBoostingClassifier(
                 learning_rate=lr_,
@@ -98,6 +115,9 @@ def _grid_hgb() -> List[HistGradientBoostingClassifier]:
                 min_samples_leaf=msl_,
                 l2_regularization=l2_,
                 max_iter=it_,
+                early_stopping=True,
+                validation_fraction=0.1,
+                n_iter_no_change=25,
                 random_state=42,
             )
         )
@@ -198,14 +218,14 @@ def train_and_select() -> Tuple[Path, Path, Path]:
     # and 2-3x faster training.
     if _LGB_AVAILABLE:
         lgb_grid = [
-            dict(n_estimators=400, learning_rate=0.05, num_leaves=31, max_depth=-1,
-                 min_child_samples=50, reg_lambda=0.0),
-            dict(n_estimators=600, learning_rate=0.03, num_leaves=31, max_depth=-1,
-                 min_child_samples=50, reg_lambda=0.0),
-            dict(n_estimators=400, learning_rate=0.05, num_leaves=63, max_depth=-1,
-                 min_child_samples=50, reg_lambda=0.1),
-            dict(n_estimators=600, learning_rate=0.03, num_leaves=63, max_depth=-1,
-                 min_child_samples=100, reg_lambda=0.1),
+            dict(n_estimators=600, learning_rate=0.05, num_leaves=31,  max_depth=-1, min_child_samples=50,  reg_lambda=0.0),
+            dict(n_estimators=800, learning_rate=0.03, num_leaves=31,  max_depth=-1, min_child_samples=50,  reg_lambda=0.0),
+            dict(n_estimators=600, learning_rate=0.05, num_leaves=63,  max_depth=-1, min_child_samples=50,  reg_lambda=0.1),
+            dict(n_estimators=800, learning_rate=0.03, num_leaves=63,  max_depth=-1, min_child_samples=100, reg_lambda=0.1),
+            dict(n_estimators=800, learning_rate=0.03, num_leaves=127, max_depth=-1, min_child_samples=100, reg_lambda=0.1),
+            dict(n_estimators=1000,learning_rate=0.02, num_leaves=31,  max_depth=-1, min_child_samples=50,  reg_lambda=0.0),
+            dict(n_estimators=1000,learning_rate=0.02, num_leaves=63,  max_depth=8,  min_child_samples=80,  reg_lambda=0.2),
+            dict(n_estimators=600, learning_rate=0.07, num_leaves=31,  max_depth=-1, min_child_samples=50,  reg_lambda=0.0),
         ]
         best_lgb = None
         best_lgb_metrics: Optional[Metrics] = None

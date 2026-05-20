@@ -32,6 +32,10 @@ class PlayerSnapshot:
     rank: float
     elo_momentum: float = float("nan")
     win_streak: float = float("nan")
+    elo_big: float = float("nan")
+    form_weighted: float = float("nan")
+    tiebreak_winrate: float = float("nan")
+    tiebreak_played: float = float("nan")
 def map_round_importance(round_code: Optional[str]) -> Tuple[float, int, int, int]:
     """build_features.py ile uyumlu round feature'ları döner."""
     if not round_code:
@@ -102,6 +106,14 @@ def get_player_snapshot(
     rank = safe("rank")
     elo_momentum = safe("elo_momentum")
     win_streak = safe("win_streak")
+    elo_big = safe("elo_big")
+    # `form_winrate{A,B}_weighted` -> handled by manual key
+    fw_key = f"form_winrate{prefix}_weighted"
+    form_weighted = float(last[fw_key]) if fw_key in last and pd.notna(last[fw_key]) else float("nan")
+    tb_w_key = f"tiebreak_winrate{prefix}"
+    tb_n_key = f"tiebreak_played{prefix}"
+    tb_w = float(last[tb_w_key]) if tb_w_key in last and pd.notna(last[tb_w_key]) else float("nan")
+    tb_n = float(last[tb_n_key]) if tb_n_key in last and pd.notna(last[tb_n_key]) else float("nan")
 
     return PlayerSnapshot(
         elo=elo,
@@ -113,6 +125,10 @@ def get_player_snapshot(
         rank=rank,
         elo_momentum=elo_momentum,
         win_streak=win_streak,
+        elo_big=elo_big,
+        form_weighted=form_weighted,
+        tiebreak_winrate=tb_w,
+        tiebreak_played=tb_n,
     )
 
 
@@ -184,6 +200,14 @@ def build_feature_row(
             row["elo_momentumA"] = snapA.elo_momentum
         if "win_streakA" in row:
             row["win_streakA"] = snapA.win_streak
+        if "elo_bigA" in row:
+            row["elo_bigA"] = snapA.elo_big
+        if "form_winrateA_weighted" in row:
+            row["form_winrateA_weighted"] = snapA.form_weighted
+        if "tiebreak_winrateA" in row:
+            row["tiebreak_winrateA"] = snapA.tiebreak_winrate
+        if "tiebreak_playedA" in row:
+            row["tiebreak_playedA"] = snapA.tiebreak_played
 
     if snapB:
         row["eloB"] = snapB.elo
@@ -197,6 +221,14 @@ def build_feature_row(
             row["elo_momentumB"] = snapB.elo_momentum
         if "win_streakB" in row:
             row["win_streakB"] = snapB.win_streak
+        if "elo_bigB" in row:
+            row["elo_bigB"] = snapB.elo_big
+        if "form_winrateB_weighted" in row:
+            row["form_winrateB_weighted"] = snapB.form_weighted
+        if "tiebreak_winrateB" in row:
+            row["tiebreak_winrateB"] = snapB.tiebreak_winrate
+        if "tiebreak_playedB" in row:
+            row["tiebreak_playedB"] = snapB.tiebreak_played
 
     # Fark feature'ları
     # PRO-TOUCH: If one player is missing (NaN), assume they are a Rookie (Elo 1500)
@@ -216,17 +248,20 @@ def build_feature_row(
     val_surfB = row["elo_surfaceB"] if pd.notna(row.get("elo_surfaceB")) else 1500.0
     row["elo_surface_diff"] = val_surfA - val_surfB
 
-    # Elo momentum + win-streak diffs
-    if "elo_momentum_diff" in row:
-        mA = row.get("elo_momentumA")
-        mB = row.get("elo_momentumB")
-        if pd.notna(mA) and pd.notna(mB):
-            row["elo_momentum_diff"] = mA - mB
-    if "win_streak_diff" in row:
-        sA = row.get("win_streakA")
-        sB = row.get("win_streakB")
-        if pd.notna(sA) and pd.notna(sB):
-            row["win_streak_diff"] = sA - sB
+    # Diffs for new features
+    for diff_key, a_key, b_key in [
+        ("elo_momentum_diff", "elo_momentumA", "elo_momentumB"),
+        ("elo_big_diff", "elo_bigA", "elo_bigB"),
+        ("win_streak_diff", "win_streakA", "win_streakB"),
+        ("form_winrate_weighted_diff", "form_winrateA_weighted", "form_winrateB_weighted"),
+        ("co_winrate_diff", "co_winrateA", "co_winrateB"),
+        ("tiebreak_winrate_diff", "tiebreak_winrateA", "tiebreak_winrateB"),
+    ]:
+        if diff_key in row:
+            va = row.get(a_key)
+            vb = row.get(b_key)
+            if pd.notna(va) and pd.notna(vb):
+                row[diff_key] = va - vb
 
     # (This block replaced by above consolidated logic)
     pass
