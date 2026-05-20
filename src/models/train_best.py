@@ -222,7 +222,24 @@ def train_and_select() -> Tuple[Path, Path, Path]:
             print(f"[best] LightGBM val={best_lgb_metrics.asdict()}")
             candidates.append(("LightGBM", best_lgb, best_lgb_metrics))
     else:
+        best_lgb = None
         print("[best] LightGBM not installed — skipping that candidate.")
+
+    # 4) Soft-voting ensemble (Phase 2.2). Averaging diverse learners — a
+    # linear model + two gradient-boosters — usually shaves a little more
+    # log-loss than any single one because their errors decorrelate.
+    estimators = [("lr", lr), ("hgb", best_hgb)]
+    if best_lgb is not None:
+        estimators.append(("lgb", best_lgb))
+    try:
+        from sklearn.ensemble import VotingClassifier
+        ensemble = VotingClassifier(estimators=estimators, voting="soft", n_jobs=-1)
+        ensemble.fit(X_tr, y_tr)
+        m_ens = _eval(y_va, ensemble.predict_proba(X_va)[:, 1])
+        print(f"[best] Ensemble val={m_ens.asdict()}")
+        candidates.append(("Ensemble", ensemble, m_ens))
+    except Exception as e:
+        print(f"[best] Ensemble skipped: {e}")
 
     # Pick the best on validation log-loss
     best_name, best_model, best_metrics = min(candidates, key=lambda c: c[2].logloss)
