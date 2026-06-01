@@ -22,6 +22,13 @@ form_winrate_diff_10
 form_winrateA_weighted
 form_winrateB_weighted
 form_winrate_weighted_diff
+opp_qualityA
+opp_qualityB
+opp_quality_diff
+match_month
+is_clay_season
+is_grass_season
+is_indoor_season
 co_count
 co_winrateA
 co_winrateB

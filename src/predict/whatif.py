@@ -39,6 +39,7 @@ class PlayerSnapshot:
     set_winrate: float = float("nan")
     sets_played: float = float("nan")
     deciding_winrate: float = float("nan")
+    opp_quality: float = float("nan")
 def map_round_importance(round_code: Optional[str]) -> Tuple[float, int, int, int]:
     """build_features.py ile uyumlu round feature'ları döner."""
     if not round_code:
@@ -117,6 +118,8 @@ def get_player_snapshot(
     tb_n_key = f"tiebreak_played{prefix}"
     tb_w = float(last[tb_w_key]) if tb_w_key in last and pd.notna(last[tb_w_key]) else float("nan")
     tb_n = float(last[tb_n_key]) if tb_n_key in last and pd.notna(last[tb_n_key]) else float("nan")
+    opp_q_key = f"opp_quality{prefix}"
+    opp_q = float(last[opp_q_key]) if opp_q_key in last and pd.notna(last[opp_q_key]) else float("nan")
 
     return PlayerSnapshot(
         elo=elo,
@@ -132,6 +135,7 @@ def get_player_snapshot(
         form_weighted=form_weighted,
         tiebreak_winrate=tb_w,
         tiebreak_played=tb_n,
+        opp_quality=opp_q,
     )
 
 
@@ -211,6 +215,8 @@ def build_feature_row(
             row["tiebreak_winrateA"] = snapA.tiebreak_winrate
         if "tiebreak_playedA" in row:
             row["tiebreak_playedA"] = snapA.tiebreak_played
+        if "opp_qualityA" in row:
+            row["opp_qualityA"] = snapA.opp_quality
 
     if snapB:
         row["eloB"] = snapB.elo
@@ -232,6 +238,8 @@ def build_feature_row(
             row["tiebreak_winrateB"] = snapB.tiebreak_winrate
         if "tiebreak_playedB" in row:
             row["tiebreak_playedB"] = snapB.tiebreak_played
+        if "opp_qualityB" in row:
+            row["opp_qualityB"] = snapB.opp_quality
 
     # Fark feature'ları
     # PRO-TOUCH: If one player is missing (NaN), assume they are a Rookie (Elo 1500)
@@ -259,6 +267,7 @@ def build_feature_row(
         ("form_winrate_weighted_diff", "form_winrateA_weighted", "form_winrateB_weighted"),
         ("co_winrate_diff", "co_winrateA", "co_winrateB"),
         ("tiebreak_winrate_diff", "tiebreak_winrateA", "tiebreak_winrateB"),
+        ("opp_quality_diff", "opp_qualityA", "opp_qualityB"),
     ]:
         if diff_key in row:
             va = row.get(a_key)

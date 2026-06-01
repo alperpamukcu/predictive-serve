@@ -4,8 +4,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Deque, Dict, List, Tuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from src.utils.config import PROCESSED_DIR
 
@@ -63,6 +63,9 @@ def compute_form_features(
     win_streakB: List[int] = []
     form_winrateA_weighted: List[float] = []
     form_winrateB_weighted: List[float] = []
+    opp_quality_A: List[float] = []
+    opp_quality_B: List[float] = []
+    opp_elo_history: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=window_long))
 
     def _weighted_winrate(hist: Deque[int], k: int) -> float:
         """Linear-decay weighted win rate over the last *k* matches: the
@@ -158,10 +161,27 @@ def compute_form_features(
         form_winrateA_weighted.append(_weighted_winrate(histA, window_long))
         form_winrateB_weighted.append(_weighted_winrate(histB, window_long))
 
+        # Opponent-quality: mean Elo of each player's last N opponents.
+        # Captures "who's been beating up on tougher fields" — a 90% form
+        # against #200-ranked opponents is very different from 60% against
+        # top 20.
+        oqA = opp_elo_history.get(playerA)
+        oqB = opp_elo_history.get(playerB)
+        opp_quality_A.append(float(np.mean(list(oqA))) if oqA else np.nan)
+        opp_quality_B.append(float(np.mean(list(oqB))) if oqB else np.nan)
+
         # Şimdi sonucu tarihle birlikte geçmişe ekleyelim
         # Bu maçta playerA kazandı, playerB kaybetti
         results_history[playerA].append(1)
         results_history[playerB].append(0)
+        # Each player's opponent Elo at the time of THIS match — used for
+        # opp_quality next time they appear.
+        elo_b = row.get("eloB")
+        elo_a = row.get("eloA")
+        if elo_b is not None and not pd.isna(elo_b):
+            opp_elo_history[playerA].append(float(elo_b))
+        if elo_a is not None and not pd.isna(elo_a):
+            opp_elo_history[playerB].append(float(elo_a))
 
         match_dates[playerA].append(date)
         match_dates[playerB].append(date)
@@ -182,6 +202,8 @@ def compute_form_features(
     df["win_streakB"] = win_streakB
     df["form_winrateA_weighted"] = form_winrateA_weighted
     df["form_winrateB_weighted"] = form_winrateB_weighted
+    df["opp_qualityA"] = opp_quality_A
+    df["opp_qualityB"] = opp_quality_B
 
     return df
 

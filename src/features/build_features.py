@@ -559,6 +559,7 @@ def random_flip_perspective(df: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
         ("elo_bigA", "elo_bigB"),
         ("win_streakA", "win_streakB"),
         ("form_winrateA_weighted", "form_winrateB_weighted"),
+        ("opp_qualityA", "opp_qualityB"),
         ("co_winrateA", "co_winrateB"),
         ("tiebreak_winrateA", "tiebreak_winrateB"),
         ("tiebreak_playedA", "tiebreak_playedB"),
@@ -667,6 +668,8 @@ def add_diff_features(df: pd.DataFrame) -> pd.DataFrame:
         df["win_streak_diff"] = df["win_streakA"] - df["win_streakB"]
     if "form_winrateA_weighted" in df.columns and "form_winrateB_weighted" in df.columns:
         df["form_winrate_weighted_diff"] = df["form_winrateA_weighted"] - df["form_winrateB_weighted"]
+    if "opp_qualityA" in df.columns and "opp_qualityB" in df.columns:
+        df["opp_quality_diff"] = df["opp_qualityA"] - df["opp_qualityB"]
     if "co_winrateA" in df.columns and "co_winrateB" in df.columns:
         df["co_winrate_diff"] = df["co_winrateA"] - df["co_winrateB"]
     if "tiebreak_winrateA" in df.columns and "tiebreak_winrateB" in df.columns:
@@ -761,6 +764,15 @@ def build_feature_dataset(
     # 5) Gün farkı feature'larını kırp ve farklarını ekle
     df = clip_days_features(df, max_days=365)
 
+    # 5b) Calendar / season — month + boolean flags for the three swing
+    # periods on the ATP calendar. Cheap to compute, helps the model pick
+    # up surface-by-time patterns (e.g. clay-court specialists peak in May).
+    months = pd.to_datetime(df["date"], errors="coerce").dt.month.fillna(0).astype(int)
+    df["match_month"] = months
+    df["is_clay_season"] = months.isin([4, 5, 6]).astype(int)
+    df["is_grass_season"] = months.isin([6, 7]).astype(int)
+    df["is_indoor_season"] = months.isin([10, 11]).astype(int)
+
     # 6) Elo, form, rank, maç sayısı, H2H, set winrate farkları
     df = add_diff_features(df)
 
@@ -776,6 +788,10 @@ def build_feature_dataset(
         "form_winrateA_5", "form_winrateB_5", "form_winrate_diff_5",
         "form_winrateA_10", "form_winrateB_10", "form_winrate_diff_10",
         "form_winrateA_weighted", "form_winrateB_weighted", "form_winrate_weighted_diff",
+        # Opponent quality (how strong have recent opponents been)
+        "opp_qualityA", "opp_qualityB", "opp_quality_diff",
+        # Calendar / season
+        "match_month", "is_clay_season", "is_grass_season", "is_indoor_season",
         # Common opponent (transitive signal)
         "co_count", "co_winrateA", "co_winrateB", "co_winrate_diff",
         # Tiebreak skill
