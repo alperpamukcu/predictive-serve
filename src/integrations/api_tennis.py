@@ -16,12 +16,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import ssl
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 from src.utils.config import DATA_DIR
 
 
 CACHE_DIR = DATA_DIR / "cache" / "api_tennis"
+
+
+class _LegacyTLSAdapter(HTTPAdapter):
+    """HTTPS adapter that forces TLS 1.2 and re-enables 'unsafe legacy
+    renegotiation'.
+
+    Some ISPs / corporate proxies do TLS interception with old stacks that
+    only speak 1.2, and api-tennis.com itself occasionally trips OpenSSL's
+    UNSAFE_LEGACY_RENEGOTIATION guard. The default urllib3 session blows
+    up with `SSL: WRONG_VERSION_NUMBER` in either case; trying this
+    adapter as a second pass clears it on most networks.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):  # type: ignore[override]
+        ctx = create_urllib3_context()
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        except Exception:
+            pass
+        try:
+            ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT (OpenSSL 3 flag)
+        except Exception:
+            pass
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+
+def _legacy_session() -> requests.Session:
+    s = requests.Session()
+    s.mount("https://", _LegacyTLSAdapter())
+    return s
 
 
 @dataclass(frozen=True)
@@ -73,7 +109,24 @@ def _get(cfg: ApiTennisConfig, params: Dict[str, Any]) -> Dict[str, Any]:
     proxies = None
     if cfg.proxy:
         proxies = {"http": cfg.proxy, "https": cfg.proxy}
-    resp = requests.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
+
+    # First try the default urllib3 stack. If it blows up with an SSL
+    # version / handshake error (common on ISPs that MITM TLS 1.3 traffic,
+    # or when OpenSSL 3 rejects legacy renegotiation), retry once with the
+    # forced TLS-1.2 + legacy-renegotiation adapter. The urllib3 retry
+    # layer wraps SSL errors in ConnectionError, so we check the message
+    # rather than the exception class.
+    try:
+        resp = requests.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
+    except requests.exceptions.RequestException as e:
+        msg = str(e).lower()
+        ssl_hints = ("wrong_version_number", "unsafe_legacy_renegotiation", "ssl: ", "handshake")
+        if any(h in msg for h in ssl_hints):
+            with _legacy_session() as sess:
+                resp = sess.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
+        else:
+            raise
+
     resp.raise_for_status()
     payload = resp.json()
     if isinstance(payload, dict) and payload.get("success") in (0, "0"):

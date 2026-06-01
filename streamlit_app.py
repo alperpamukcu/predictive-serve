@@ -91,16 +91,9 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 
 # =============================================================================
-# Paths
+# Paths (most live in src.ui.data; re-imported below for local references)
 # =============================================================================
 
-PRED_PATH = PROCESSED_DIR / "all_predictions.csv"
-HISTORY_PATH = PROCESSED_DIR / "matches_with_elo_form.csv"
-FIXTURES_PATH = PROCESSED_DIR / "fixtures_upcoming.csv"
-METRICS_PATH = MODELS_DIR / "metrics.json"
-MODEL_PATH = MODELS_DIR / "logreg_final.pkl"
-IMPUTER_PATH = MODELS_DIR / "imputer_final.pkl"
-FEATURE_COLS_PATH = MODELS_DIR / "feature_columns.txt"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 NAV = ["Matches", "Upcoming", "Players", "Tournaments", "What-if", "Leaderboard"]
@@ -134,74 +127,20 @@ def navigate_to_view(view: str) -> None:
 # Loaders (cached)
 # =============================================================================
 
-def _coerce_str(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
-    for c in cols:
-        if c in df.columns:
-            df[c] = (
-                df[c].astype(str)
-                .str.replace(" ", " ", regex=False)
-                .str.strip()
-            )
-    return df
-
-
-@st.cache_data(show_spinner=False)
-def load_predictions() -> pd.DataFrame:
-    if not PRED_PATH.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(PRED_PATH)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = _coerce_str(df, ["surface", "playerA", "playerB"])
-    return df
-
-
-@st.cache_data(show_spinner=False)
-def load_history() -> pd.DataFrame:
-    if not HISTORY_PATH.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(HISTORY_PATH, low_memory=False)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if "tourney" in df.columns and "tournament" not in df.columns:
-        df = df.rename(columns={"tourney": "tournament"})
-    df = _coerce_str(df, ["surface", "round", "tournament", "playerA", "playerB"])
-    return df
-
-
-@st.cache_data(show_spinner=False)
-def load_real_fixtures() -> pd.DataFrame:
-    if not FIXTURES_PATH.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(FIXTURES_PATH)
-    if "match_date" in df.columns and "date" not in df.columns:
-        df = df.rename(columns={"match_date": "date"})
-    df["date"] = pd.to_datetime(df.get("date"), errors="coerce")
-    if "tourney" in df.columns and "tournament" not in df.columns:
-        df = df.rename(columns={"tourney": "tournament"})
-    df = _coerce_str(df, ["tournament", "surface", "round", "playerA", "playerB"])
-    for c in ("oddsA", "oddsB"):
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
-
-@st.cache_resource(show_spinner=False)
-def load_artifacts() -> Tuple[Any, Any, List[str]]:
-    if not (MODEL_PATH.exists() and IMPUTER_PATH.exists() and FEATURE_COLS_PATH.exists()):
-        return None, None, []
-    model = joblib_load(MODEL_PATH)
-    imputer = joblib_load(IMPUTER_PATH)
-    feature_cols = load_feature_list(FEATURE_COLS_PATH)
-    return model, imputer, feature_cols
-
-
-@st.cache_data(show_spinner=False)
-def load_metrics_json() -> Dict[str, Any]:
-    if not METRICS_PATH.exists():
-        return {}
-    try:
-        return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+from src.ui.data import (  # noqa: E402
+    FEATURE_COLS_PATH,
+    FIXTURES_PATH,
+    HISTORY_PATH,
+    IMPUTER_PATH,
+    METRICS_PATH,
+    MODEL_PATH,
+    PRED_PATH,
+    load_artifacts,
+    load_history,
+    load_metrics_json,
+    load_predictions,
+    load_real_fixtures,
+)
 
 
 def _canonical_key(name: str) -> str:
@@ -2677,6 +2616,24 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
         value=history_df["date"].max().date() if not history_df.empty else pd.Timestamp.today().date(),
         key="w_date",
     )
+
+    # Optional bookmaker odds — when both are supplied we compute the
+    # market-implied probability, model vs market edge, and a fractional
+    # Kelly stake (capped at 10%) per side.
+    odds_cols = st.columns([1, 1, 6])
+    with odds_cols[0]:
+        odds_a_input = st.number_input(
+            "Decimal odds A",
+            min_value=1.01, max_value=99.0, value=1.01, step=0.01,
+            key="w_odds_a", format="%.2f",
+            help="Leave at 1.01 to skip — Kelly + edge only render when both sides have realistic odds.",
+        )
+    with odds_cols[1]:
+        odds_b_input = st.number_input(
+            "Decimal odds B",
+            min_value=1.01, max_value=99.0, value=1.01, step=0.01,
+            key="w_odds_b", format="%.2f",
+        )
     if pa == pb:
         st.warning("Pick two different players.")
         return
@@ -2737,6 +2694,59 @@ def tab_whatif(history_df: pd.DataFrame) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+    # If realistic decimal odds were supplied, expose market-implied %,
+    # model-vs-market edge and a fractional Kelly stake suggestion.
+    if odds_a_input > 1.05 and odds_b_input > 1.05:
+        oa = float(odds_a_input)
+        ob = float(odds_b_input)
+        inv_a, inv_b = 1.0 / oa, 1.0 / ob
+        denom = inv_a + inv_b
+        p_market_a = inv_a / denom if denom > 0 else 0.5
+        p_market_b = 1.0 - p_market_a
+        edge_a = p - p_market_a
+        edge_b = (1 - p) - p_market_b
+        ka = kelly_fraction(p, oa)
+        kb = kelly_fraction(1 - p, ob)
+
+        def _pill(label: str, value: str, mode: str) -> str:
+            colour = {
+                "good": "rgba(45,210,154,0.16); color:#7ee2b1; border-color:rgba(45,210,154,0.40)",
+                "bad":  "rgba(255,100,113,0.14); color:#ff9aa3; border-color:rgba(255,100,113,0.36)",
+                "neutral": "rgba(255,255,255,0.06); color:var(--text); border-color:var(--line)",
+            }[mode]
+            return (
+                f'<span style="display:inline-block;padding:5px 12px;border-radius:999px;'
+                f'border:1px solid;font-weight:700;font-size:0.85rem;background:{colour};">'
+                f'{h(label)} <span style="opacity:.75;font-weight:500;margin-left:4px;">{h(value)}</span>'
+                f'</span>'
+            )
+
+        chips_a = [
+            _pill(f"{pa.split()[-1]} market", f"{p_market_a*100:.1f}%", "neutral"),
+            _pill("edge", f"{edge_a*100:+.1f}pp", "good" if edge_a > 0 else "bad"),
+        ]
+        if ka > 0:
+            chips_a.append(_pill("Kelly stake", f"{ka*100:.1f}%", "good"))
+        chips_b = [
+            _pill(f"{pb.split()[-1]} market", f"{p_market_b*100:.1f}%", "neutral"),
+            _pill("edge", f"{edge_b*100:+.1f}pp", "good" if edge_b > 0 else "bad"),
+        ]
+        if kb > 0:
+            chips_b.append(_pill("Kelly stake", f"{kb*100:.1f}%", "good"))
+
+        st.markdown(
+            f"""
+            <div class="ps-card" style="padding:14px 18px;">
+              <div style="font-size:0.78rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:8px;">
+                Market view &middot; fractional Kelly (10% cap)
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">{''.join(chips_a)}</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">{''.join(chips_b)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     render_tale_of_tape(row_df, pa, pb)
     render_h2h(pa, pb)
@@ -2977,7 +2987,22 @@ def tab_leaderboard(history_df: pd.DataFrame) -> None:
 
 _init_state()
 render_nav()
-render_live_ticker()
+
+# The live ticker polls api-tennis.com livescore endpoint and is the only
+# part of the page that genuinely changes minute-to-minute. Wrapping it
+# in a Streamlit fragment with run_every="60s" makes IT refresh on its
+# own without forcing the whole app (model load, table render, ...) to
+# rerun. On older Streamlit (no st.fragment) we fall back to a normal
+# call — the ticker simply waits for the next user interaction.
+try:
+    @st.fragment(run_every="60s")
+    def _live_ticker_fragment():
+        cached_livescore.clear()  # bust the 60-s TTL so we actually re-pull
+        render_live_ticker()
+    _live_ticker_fragment()
+except Exception:
+    render_live_ticker()
+
 render_hero()
 render_coverage()
 
