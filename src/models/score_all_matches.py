@@ -183,6 +183,52 @@ def main() -> None:
         "val": val_report,
         "test": test_report,
     }
+
+    # ---- Calibration reliability (10 bins, test window) -----------------
+    # Splits predictions into deciles and reports the actual win rate per
+    # bin. A well-calibrated model has mean_pred ≈ observed_rate per bin.
+    test_idx = (yr >= VAL_END_YEAR)
+    if test_idx.sum() >= 200:
+        y_test = y[test_idx]
+        p_test = p_blend_full[test_idx]
+        bins = np.linspace(0.0, 1.0, 11)
+        rel: list[dict] = []
+        for i in range(10):
+            lo, hi = bins[i], bins[i + 1]
+            mask = (p_test >= lo) & (p_test < hi if i < 9 else p_test <= hi)
+            if mask.sum() == 0:
+                continue
+            rel.append({
+                "bin_low": float(lo),
+                "bin_high": float(hi),
+                "n": int(mask.sum()),
+                "mean_pred": float(p_test[mask].mean()),
+                "observed_rate": float(y_test[mask].mean()),
+            })
+        metrics["calibration_test"] = rel
+
+    # ---- Per-tournament accuracy on the test window ---------------------
+    # Highlights where the model is consistently strong / weak so the user
+    # can take confidence in the right context.
+    try:
+        if "tournament" in df.columns and test_idx.sum() >= 200:
+            sub = df[test_idx].copy()
+            sub["__pick"] = np.where(p_blend_full[test_idx] >= 0.5, 1, 0)
+            sub["__y"] = y[test_idx]
+            sub["__correct"] = (sub["__pick"] == sub["__y"]).astype(int)
+            agg = (
+                sub.groupby("tournament")["__correct"]
+                .agg(["count", "mean"])
+                .rename(columns={"count": "n", "mean": "accuracy"})
+                .reset_index()
+            )
+            agg = agg[agg["n"] >= 25].sort_values("accuracy", ascending=False)
+            metrics["tournament_accuracy_test"] = [
+                {"tournament": r["tournament"], "n": int(r["n"]), "accuracy": float(r["accuracy"])}
+                for _, r in agg.head(40).iterrows()
+            ]
+    except Exception as e:
+        print(f"[score_all] tournament accuracy block skipped: {e}")
     METRICS_PATH.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(f"[score_all] Patched {METRICS_PATH} with blend stats.")
     if val_report:

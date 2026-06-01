@@ -672,6 +672,17 @@ div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, .stTextInput 
 .h2h-bar-a { background: linear-gradient(90deg, #ff7059, #ffb27a); }
 .h2h-bar-b { background: linear-gradient(90deg, #6aa9ff, #9c87ff); }
 
+/* Kelly bet sizing pills */
+.kelly-row { margin: 4px 0 10px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.kelly-pill {
+  display: inline-block; padding: 4px 12px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 700;
+  border: 1px solid;
+  font-variant-numeric: tabular-nums;
+}
+.kelly-pill.kelly-a { background: rgba(255, 112, 89, 0.12); color: #ffb27a; border-color: rgba(255, 112, 89, 0.30); }
+.kelly-pill.kelly-b { background: rgba(106, 169, 255, 0.12); color: #9fc4ff; border-color: rgba(106, 169, 255, 0.30); }
+
 /* Tournament round cards */
 .round-card {
   padding: 12px 18px; margin-bottom: 8px;
@@ -1567,6 +1578,25 @@ def _render_upcoming_card(r: pd.Series, uid: str, *, state: str = "scheduled") -
         meta_pieces.append(h(surface))
     meta_html = " · ".join(meta_pieces)
 
+    # Kelly bet sizing — only when this match carries bookmaker odds AND
+    # the model thinks the bet has positive expected value.
+    odds_a_v = r.get("oddsA")
+    odds_b_v = r.get("oddsB")
+    kelly_html = ""
+    try:
+        if pd.notna(odds_a_v) and pd.notna(odds_b_v) and float(odds_a_v) > 1.0 and float(odds_b_v) > 1.0:
+            ka = kelly_fraction(p_a, float(odds_a_v))
+            kb = kelly_fraction(p_b, float(odds_b_v))
+            chips = []
+            if ka > 0:
+                chips.append(f"<span class='kelly-pill kelly-a'>📈 {pa_disp.split()[-1]} stake {ka*100:.1f}%</span>")
+            if kb > 0:
+                chips.append(f"<span class='kelly-pill kelly-b'>📈 {pb_disp.split()[-1]} stake {kb*100:.1f}%</span>")
+            if chips:
+                kelly_html = "<div class='kelly-row'>" + " ".join(chips) + "</div>"
+    except Exception:
+        pass
+
     badge_html = ""
     extra_class = ""
     if state == "live":
@@ -1603,6 +1633,7 @@ def _render_upcoming_card(r: pd.Series, uid: str, *, state: str = "scheduled") -
         f"""
         <div class="up-card {extra_class}">
           <div class="up-meta">{badge_html}{meta_html}</div>
+          {kelly_html}
           <div class="up-row">
             <div class="up-side">
               <div class="up-photo">{img_a}</div>
@@ -1827,6 +1858,30 @@ def _kpi(label: str, value: str, sub: str = "") -> str:
     )
 
 
+def kelly_fraction(p_win: float, decimal_odds: float, cap: float = 0.10) -> float:
+    """Kelly criterion stake size as a fraction of bankroll.
+
+    f* = (b·p - q) / b      with b = decimal_odds - 1, q = 1 - p
+
+    Capped at *cap* (default 10%) — full Kelly is famously volatile, most
+    operators use fractional / capped Kelly. Returns 0 when there is no
+    positive edge (i.e. the bet is unprofitable in expectation).
+    """
+    try:
+        p = float(p_win)
+        o = float(decimal_odds)
+    except Exception:
+        return 0.0
+    if not (0.0 < p < 1.0) or o <= 1.0:
+        return 0.0
+    b = o - 1.0
+    q = 1.0 - p
+    f = (b * p - q) / b
+    if f <= 0.0:
+        return 0.0
+    return min(f, cap)
+
+
 def confidence_label(p: float) -> str:
     d = abs(p - 0.5)
     if d < 0.06:
@@ -1939,6 +1994,69 @@ def _render_about_dialog() -> None:
         """,
         unsafe_allow_html=False,
     )
+
+    # --- Top model drivers (feature importance) ---
+    fi = info.get("feature_importance") or []
+    if fi:
+        st.markdown("#### Top model drivers")
+        st.caption("Normalised gradient-boosting importances (sum = 1.0). Bigger = more influence on the model's pick.")
+        fi_top = fi[:12]
+        max_v = max(item["importance"] for item in fi_top) or 1.0
+        bars = []
+        for item in fi_top:
+            pct = (item["importance"] / max_v) * 100
+            label = h(item["feature"])
+            bars.append(
+                f"<div style='display:grid;grid-template-columns:200px 1fr 60px;align-items:center;gap:10px;margin:4px 0;'>"
+                f"<div style='color:var(--muted);font-size:0.85rem;'>{label}</div>"
+                f"<div style='background:rgba(255,255,255,0.06);height:8px;border-radius:4px;overflow:hidden;'>"
+                f"<div style='background:linear-gradient(90deg,#6aa9ff,#9c87ff);height:100%;width:{pct:.0f}%;border-radius:4px;'></div>"
+                f"</div>"
+                f"<div style='color:#fff;font-weight:700;font-size:0.82rem;text-align:right;'>{item['importance']*100:.1f}%</div>"
+                f"</div>"
+            )
+        st.markdown("".join(bars), unsafe_allow_html=True)
+
+    # --- Calibration reliability ---
+    calib = info.get("calibration_test") or []
+    if calib:
+        st.markdown("#### Calibration (held-out 2025 test)")
+        st.caption("Each row groups predictions by 10-percentage-point band. A well-calibrated model has `mean predicted` ≈ `observed win rate`.")
+        rows = ["<table style='width:100%;font-size:0.85rem;'><thead><tr><th style='text-align:left;color:var(--muted);'>Pred band</th><th style='text-align:right;color:var(--muted);'>n</th><th style='text-align:right;color:var(--muted);'>Mean pred</th><th style='text-align:right;color:var(--muted);'>Observed</th><th style='text-align:right;color:var(--muted);'>Δ</th></tr></thead><tbody>"]
+        for b in calib:
+            delta = b["observed_rate"] - b["mean_pred"]
+            color = "#7ee2b1" if abs(delta) < 0.05 else "#ffb27a" if abs(delta) < 0.10 else "#ff6471"
+            rows.append(
+                f"<tr><td style='padding:3px 0;'>{b['bin_low']*100:.0f}–{b['bin_high']*100:.0f}%</td>"
+                f"<td style='text-align:right;'>{b['n']}</td>"
+                f"<td style='text-align:right;color:#fff;'>{b['mean_pred']*100:.1f}%</td>"
+                f"<td style='text-align:right;color:#fff;'>{b['observed_rate']*100:.1f}%</td>"
+                f"<td style='text-align:right;color:{color};font-weight:700;'>{delta*100:+.1f}pp</td></tr>"
+            )
+        rows.append("</tbody></table>")
+        st.markdown("".join(rows), unsafe_allow_html=True)
+
+    # --- Per-tournament accuracy on the test window ---
+    tour_acc = info.get("tournament_accuracy_test") or []
+    if tour_acc:
+        st.markdown("#### Where the model is strongest / weakest")
+        st.caption("2025+ test set, tournaments with ≥ 25 scored matches. Sorted by accuracy.")
+        top = tour_acc[:8]
+        bottom = tour_acc[-8:] if len(tour_acc) > 8 else []
+        cols = st.columns(2)
+        with cols[0]:
+            st.markdown("**Top 8 (strongest)**")
+            for t in top:
+                st.markdown(
+                    f"- {h(t['tournament'])} — **{t['accuracy']*100:.1f}%** ({t['n']} matches)"
+                )
+        with cols[1]:
+            if bottom:
+                st.markdown("**Bottom 8 (weakest)**")
+                for t in reversed(bottom):
+                    st.markdown(
+                        f"- {h(t['tournament'])} — **{t['accuracy']*100:.1f}%** ({t['n']} matches)"
+                    )
 
 
 def render_nav() -> None:

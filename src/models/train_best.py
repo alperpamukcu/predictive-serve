@@ -287,6 +287,34 @@ def train_and_select() -> Tuple[Path, Path, Path]:
         test_metrics_dict = m_te.asdict()
         print(f"[best] {best_name} TEST={test_metrics_dict}")
 
+    # Feature importance via permutation — model-agnostic, works for
+    # HistGradientBoosting, LightGBM, calibrated wrappers and ensembles.
+    # Computed on a 3k-row validation slice so the script stays fast.
+    feature_importance: list[dict[str, float]] = []
+    try:
+        from sklearn.inspection import permutation_importance
+
+        sample_n = min(3000, len(X_va))
+        rng = np.random.default_rng(42)
+        idx = rng.choice(len(X_va), size=sample_n, replace=False)
+        X_pi = X_va[idx]
+        y_pi = y_va[idx]
+        pi = permutation_importance(
+            best_model, X_pi, y_pi,
+            n_repeats=5, random_state=42, n_jobs=-1, scoring="neg_log_loss",
+        )
+        importances = np.maximum(pi.importances_mean, 0.0)  # negative = unused
+        if importances.sum() > 0 and len(importances) == len(feats):
+            total = float(importances.sum())
+            ranked = sorted(
+                ((f, float(v) / total) for f, v in zip(feats, importances)),
+                key=lambda kv: -kv[1],
+            )
+            feature_importance = [{"feature": f, "importance": v} for f, v in ranked[:25]]
+            print(f"[best] Top 5 features by permutation importance: {[f for f, _ in ranked[:5]]}")
+    except Exception as e:
+        print(f"[best] permutation importance skipped: {e}")
+
     # Market baseline (for reporting, on val rows where odds exist)
     market_baseline = None
     if "pA_market" in val_df.columns and "has_market" in val_df.columns:
@@ -317,6 +345,7 @@ def train_and_select() -> Tuple[Path, Path, Path]:
                 "validation": best_metrics.asdict(),
                 "test": test_metrics_dict,
                 "market_baseline_val": market_baseline,
+                "feature_importance": feature_importance,
             },
             indent=2,
         ),
