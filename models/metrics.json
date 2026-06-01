@@ -3,14 +3,14 @@
   "n_features": 76,
   "validation": {
     "n": 7794,
-    "logloss": 0.6044915833545451,
-    "brier": 0.2095081126989061,
+    "logloss": 0.6044915841137297,
+    "brier": 0.2095081129155884,
     "accuracy": 0.6621760328457788
   },
   "test": {
     "n": 3639,
-    "logloss": 0.6120198486539086,
-    "brier": 0.21278160304043092,
+    "logloss": 0.6120198471218126,
+    "brier": 0.2127816022949245,
     "accuracy": 0.6540258312723276
   },
   "market_baseline_val": {
@@ -22,103 +22,103 @@
   "feature_importance": [
     {
       "feature": "elo_diff",
-      "importance": 0.2161665014154392
+      "importance": 0.21616646442719592
     },
     {
       "feature": "elo_surface_diff",
-      "importance": 0.15769566522964823
+      "importance": 0.1576955912881382
     },
     {
       "feature": "rank_diff",
-      "importance": 0.1453536050700782
+      "importance": 0.14535361966444346
     },
     {
       "feature": "form_winrate_diff_5",
-      "importance": 0.07865832798182414
+      "importance": 0.07865839799944703
     },
     {
       "feature": "form_winrateA_5",
-      "importance": 0.044407700666443624
+      "importance": 0.04440774365065588
     },
     {
       "feature": "form_winrateB_5",
-      "importance": 0.04416614087863083
+      "importance": 0.04416617745231489
     },
     {
       "feature": "opp_quality_diff",
-      "importance": 0.03486936679544062
+      "importance": 0.034869324224785885
     },
     {
       "feature": "days_since_lastA_clipped",
-      "importance": 0.028174258766309194
+      "importance": 0.028174254817427538
     },
     {
       "feature": "form_winrateA_10",
-      "importance": 0.023593990668706242
+      "importance": 0.023594003267545103
     },
     {
       "feature": "days_since_lastB_clipped",
-      "importance": 0.022173694910105263
+      "importance": 0.02217369300747583
     },
     {
       "feature": "sets_playedB",
-      "importance": 0.01900838457157927
+      "importance": 0.019008387591390858
     },
     {
       "feature": "sets_playedA",
-      "importance": 0.017073027364631965
+      "importance": 0.01707303612292382
     },
     {
       "feature": "form_winrateB_10",
-      "importance": 0.015437299688777053
+      "importance": 0.01543731181695618
     },
     {
       "feature": "form_winrate_diff_10",
-      "importance": 0.015130388105045103
+      "importance": 0.015130402129677308
     },
     {
       "feature": "days_since_last_diff_clipped",
-      "importance": 0.012848583128074657
+      "importance": 0.01284855968177796
     },
     {
       "feature": "form_winrate_weighted_diff",
-      "importance": 0.010589433245378917
+      "importance": 0.010589434443124511
     },
     {
       "feature": "win_streakB",
-      "importance": 0.01054399070482036
+      "importance": 0.01054398714940171
     },
     {
       "feature": "series_tier",
-      "importance": 0.0100472785737045
+      "importance": 0.010047273288585023
     },
     {
       "feature": "opp_qualityB",
-      "importance": 0.009123036793864033
+      "importance": 0.009123021340226701
     },
     {
       "feature": "eloA",
-      "importance": 0.008580682135139938
+      "importance": 0.00858068318868352
     },
     {
       "feature": "elo_surfaceA",
-      "importance": 0.008572018174892037
+      "importance": 0.008572008247214626
     },
     {
       "feature": "elo_momentumB",
-      "importance": 0.008199627891967145
+      "importance": 0.008199627784392653
     },
     {
       "feature": "matches_last30_diff",
-      "importance": 0.006811717671948283
+      "importance": 0.006811718192633811
     },
     {
       "feature": "tiebreak_playedB",
-      "importance": 0.005488486042289797
+      "importance": 0.005488481231899366
     },
     {
       "feature": "rankA",
-      "importance": 0.004981950119110027
+      "importance": 0.004981953430273915
     }
   ],
   "blend": {
@@ -131,21 +131,21 @@
     "val": {
       "n": 7794,
       "model": {
-        "logloss": 0.6046119691190693,
-        "brier": 0.2095793968895477,
+        "logloss": 0.6046119701327596,
+        "brier": 0.20957939733985173,
         "accuracy": 0.6607646907877854
       },
       "blend": {
-        "logloss": 0.5830737338346702,
-        "brier": 0.20013889073015212,
+        "logloss": 0.5830737338812697,
+        "brier": 0.20013889074814872,
         "accuracy": 0.680651783423146
       }
     },
     "test": {
       "n": 3639,
       "model": {
-        "logloss": 0.6120198486539086,
-        "brier": 0.21278160304043092,
+        "logloss": 0.6120198471218126,
+        "brier": 0.2127816022949245,
         "accuracy": 0.6540258312723276
       },
       "blend": {
