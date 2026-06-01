@@ -118,6 +118,11 @@ div[data-testid="stToolbar"] { visibility: hidden; height: 0; }
   color:var(--text); font-size:0.78rem; font-weight:600;
 }
 .ps-pill .dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
+.ps-pill.freshness-fresh .dot { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.ps-pill.freshness-warn { color: #ffcc66; border-color: rgba(255,200,80,0.40); }
+.ps-pill.freshness-warn .dot { background: #ffcc66; box-shadow: 0 0 8px rgba(255,200,80,0.5); }
+.ps-pill.freshness-stale { color: var(--bad); border-color: rgba(255,100,113,0.40); }
+.ps-pill.freshness-stale .dot { background: var(--bad); box-shadow: 0 0 8px rgba(255,100,113,0.5); }
 
 /* Hero */
 .ps-hero {

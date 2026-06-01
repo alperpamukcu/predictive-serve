@@ -1352,6 +1352,27 @@ def render_nav() -> None:
     if isinstance(val.get("logloss"), (int, float)) and isinstance(val.get("accuracy"), (int, float)):
         pill = f"{model_label} | acc {val['accuracy']*100:.1f}% | log loss {val['logloss']:.3f}"
 
+    # Second pill — when was the data last refreshed and is it current.
+    # Reads the predictions CSV mtime so it reflects the actual on-disk
+    # snapshot, regardless of whether the cron or a manual run wrote it.
+    freshness_pill = ""
+    try:
+        pred_mtime = dt.datetime.fromtimestamp(PRED_PATH.stat().st_mtime)
+        age_h = (dt.datetime.now() - pred_mtime).total_seconds() / 3600
+        if age_h < 12:
+            colour, label = "fresh", "fresh"
+        elif age_h < 36:
+            colour, label = "warn", f"{int(age_h)}h ago"
+        else:
+            colour, label = "stale", f"{int(age_h)//24}d ago"
+        freshness_pill = (
+            f'<span class="ps-pill freshness-{colour}">'
+            f'<span class="dot"></span>data {h(label)}'
+            f'</span>'
+        )
+    except Exception:
+        pass
+
     nav_l, nav_r = st.columns([8, 1])
     with nav_l:
         st.markdown(
@@ -1361,7 +1382,10 @@ def render_nav() -> None:
                 <div class="ps-logo">PS</div>
                 <div class="ps-brand">Predictive Serve<small>Tennis forecasting console</small></div>
               </div>
-              <span class="ps-pill"><span class="dot"></span>{h(pill)}</span>
+              <div style="display:flex;gap:8px;align-items:center;">
+                {freshness_pill}
+                <span class="ps-pill"><span class="dot"></span>{h(pill)}</span>
+              </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1910,10 +1934,25 @@ def _history_player_index(history_df: pd.DataFrame) -> Tuple[dict, dict, list]:
 def tab_upcoming(history_df: pd.DataFrame) -> None:
     st.markdown("<div class='ps-section-title'>Upcoming Fixtures</div>", unsafe_allow_html=True)
 
-    real = load_real_fixtures()
-    has_real = not real.empty
+    real_raw = load_real_fixtures()
     has_key = _api_key() is not None
 
+    # Inspect freshness of the on-disk fixtures file before filtering.
+    # When the file exists but only carries past matches, that's a stale
+    # snapshot from a refresh that couldn't reach the API — not a
+    # legitimate "no upcoming" signal.
+    fixture_file_mtime: Optional[dt.datetime] = None
+    fixture_latest_date = None
+    try:
+        if FIXTURES_PATH.exists():
+            fixture_file_mtime = dt.datetime.fromtimestamp(FIXTURES_PATH.stat().st_mtime)
+        if not real_raw.empty:
+            fixture_latest_date = pd.to_datetime(real_raw["date"], errors="coerce").max()
+    except Exception:
+        pass
+
+    real = real_raw
+    has_real = not real.empty
     if has_real:
         real = real.copy()
         real["date"] = pd.to_datetime(real["date"], errors="coerce")
@@ -1922,6 +1961,19 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
         if real.empty:
             has_real = False
 
+    # Determine the actual data mode. With an API key configured we never
+    # silently fall back to demo any more — instead we tell the user the
+    # last successful refresh and let them re-trigger it.
+    fixtures_stale = (
+        has_key
+        and not has_real
+        and (
+            fixture_latest_date is None
+            or fixture_latest_date < pd.Timestamp.today().normalize() - pd.Timedelta(days=1)
+        )
+    )
+    use_demo = (not has_key) and (not has_real)
+
     # Toolbar
     bar1, bar2 = st.columns([3, 1.6])
     with bar1:
@@ -1929,8 +1981,20 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
             st.markdown('<span class="live-pill">live fixtures</span>', unsafe_allow_html=True)
             st.caption(f"Loaded from `{FIXTURES_PATH}`")
         elif has_key:
-            st.markdown('<span class="demo-pill">demo data</span>', unsafe_allow_html=True)
-            st.caption("API key detected — click the refresh button to pull live ATP fixtures.")
+            st.markdown('<span class="demo-pill">live feed unreachable</span>', unsafe_allow_html=True)
+            last_seen = (
+                fixture_latest_date.date().isoformat() if fixture_latest_date is not None else "never"
+            )
+            last_refresh = (
+                fixture_file_mtime.strftime("%Y-%m-%d %H:%M")
+                if fixture_file_mtime is not None
+                else "never"
+            )
+            st.caption(
+                f"Last successful fixture pull: matches up to **{last_seen}** "
+                f"(file refreshed at {last_refresh}). Hit the button to retry — "
+                f"or the next daily cron at 04:00 / 14:00 UTC will pick it up."
+            )
         else:
             st.markdown('<span class="demo-pill">demo data &middot; no api key</span>', unsafe_allow_html=True)
             st.caption("Set API_TENNIS_KEY in .env to enable live fixtures.")
@@ -1948,7 +2012,23 @@ def tab_upcoming(history_df: pd.DataFrame) -> None:
                 st.code(log_text or "(empty)", language="text")
             st.rerun()
 
-    fix = real if has_real else synth_fixtures(history_df)
+    # Demo only when the user genuinely has no API key. Otherwise show the
+    # stale-fixtures notice + an empty state — fake matches were misleading.
+    if use_demo:
+        fix = synth_fixtures(history_df)
+    elif has_real:
+        fix = real
+    else:
+        st.markdown(
+            '<div class="empty-state">'
+            "No fresh fixtures available right now. "
+            "The deployed app refreshes twice a day (04:00 + 14:00 UTC); "
+            "if you're running locally you can hit the refresh button above."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
     if fix.empty:
         st.markdown('<div class="empty-state">Could not generate any fixtures (history dataset empty).</div>', unsafe_allow_html=True)
         return

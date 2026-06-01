@@ -1,10 +1,17 @@
 name: Daily refresh
 
-# Runs every day at 04:00 UTC (around 07:00 in Istanbul, before the app's
-# usual peak window). Also exposed as a manual trigger from the Actions tab.
+# Runs TWICE a day so the app stays close to the live calendar:
+#   04:00 UTC — before the European day starts (catches overnight US matches
+#               and ensures the morning UI has yesterday's results merged)
+#   14:00 UTC — mid-European-afternoon (catches the bulk of the day's ATP
+#               action so the Upcoming + Live tabs don't drift)
+# Also exposed as a manual trigger from the Actions tab, and from the UI
+# via the "Refresh fixtures from API" button (which subprocesses locally
+# for self-hosted; for deployed Streamlit Cloud users would hit Actions).
 on:
   schedule:
     - cron: "0 4 * * *"
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 permissions:
