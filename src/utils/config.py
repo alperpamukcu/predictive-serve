@@ -17,7 +17,6 @@ RAW_DIR: Path = DATA_DIR / "raw"
 PROCESSED_DIR: Path = DATA_DIR / "processed"
 
 MODELS_DIR: Path = PROJECT_ROOT / "models"
-NOTEBOOKS_DIR: Path = PROJECT_ROOT / "notebooks"
 
 # allyears.csv için canonical path
 ALLYEARS_PATH: Path = RAW_DIR / "allyears.csv"
