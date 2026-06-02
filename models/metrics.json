@@ -3,15 +3,15 @@
   "n_features": 76,
   "validation": {
     "n": 7794,
-    "logloss": 0.6044915841137297,
-    "brier": 0.2095081129155884,
-    "accuracy": 0.6621760328457788
+    "logloss": 0.6044682788512264,
+    "brier": 0.20948739264550792,
+    "accuracy": 0.6630741596099564
   },
   "test": {
     "n": 3639,
-    "logloss": 0.6120198471218126,
-    "brier": 0.2127816022949245,
-    "accuracy": 0.6540258312723276
+    "logloss": 0.6125406162729246,
+    "brier": 0.21298555943597308,
+    "accuracy": 0.6532014289640011
   },
   "market_baseline_val": {
     "n": 7774,
@@ -22,131 +22,131 @@
   "feature_importance": [
     {
       "feature": "elo_diff",
-      "importance": 0.21616646442719592
+      "importance": 0.24161087397235495
     },
     {
       "feature": "elo_surface_diff",
-      "importance": 0.1576955912881382
+      "importance": 0.14893182559452495
     },
     {
       "feature": "rank_diff",
-      "importance": 0.14535361966444346
+      "importance": 0.1412755949482799
     },
     {
       "feature": "form_winrate_diff_5",
-      "importance": 0.07865839799944703
+      "importance": 0.08081281183406043
     },
     {
       "feature": "form_winrateA_5",
-      "importance": 0.04440774365065588
+      "importance": 0.04520350388764011
     },
     {
       "feature": "form_winrateB_5",
-      "importance": 0.04416617745231489
+      "importance": 0.043084752783658344
     },
     {
       "feature": "opp_quality_diff",
-      "importance": 0.034869324224785885
+      "importance": 0.0331330428100169
     },
     {
       "feature": "days_since_lastA_clipped",
-      "importance": 0.028174254817427538
+      "importance": 0.02805136353444701
     },
     {
       "feature": "form_winrateA_10",
-      "importance": 0.023594003267545103
+      "importance": 0.02300738664345287
     },
     {
       "feature": "days_since_lastB_clipped",
-      "importance": 0.02217369300747583
+      "importance": 0.020982550976188504
     },
     {
       "feature": "sets_playedB",
-      "importance": 0.019008387591390858
-    },
-    {
-      "feature": "sets_playedA",
-      "importance": 0.01707303612292382
+      "importance": 0.017032633434770062
     },
     {
       "feature": "form_winrateB_10",
-      "importance": 0.01543731181695618
+      "importance": 0.015584694888759822
+    },
+    {
+      "feature": "sets_playedA",
+      "importance": 0.01530742173406785
     },
     {
       "feature": "form_winrate_diff_10",
-      "importance": 0.015130402129677308
+      "importance": 0.014380312594646233
     },
     {
       "feature": "days_since_last_diff_clipped",
-      "importance": 0.01284855968177796
-    },
-    {
-      "feature": "form_winrate_weighted_diff",
-      "importance": 0.010589434443124511
+      "importance": 0.011571392639380404
     },
     {
       "feature": "win_streakB",
-      "importance": 0.01054398714940171
+      "importance": 0.010428995186465178
     },
     {
-      "feature": "series_tier",
-      "importance": 0.010047273288585023
-    },
-    {
-      "feature": "opp_qualityB",
-      "importance": 0.009123021340226701
-    },
-    {
-      "feature": "eloA",
-      "importance": 0.00858068318868352
-    },
-    {
-      "feature": "elo_surfaceA",
-      "importance": 0.008572008247214626
-    },
-    {
-      "feature": "elo_momentumB",
-      "importance": 0.008199627784392653
+      "feature": "form_winrate_weighted_diff",
+      "importance": 0.009849468339459691
     },
     {
       "feature": "matches_last30_diff",
-      "importance": 0.006811718192633811
+      "importance": 0.009799420459889914
+    },
+    {
+      "feature": "series_tier",
+      "importance": 0.00968531506124966
+    },
+    {
+      "feature": "opp_qualityB",
+      "importance": 0.008954996708397445
+    },
+    {
+      "feature": "elo_surfaceA",
+      "importance": 0.00880925434610722
+    },
+    {
+      "feature": "eloA",
+      "importance": 0.00874596008782437
+    },
+    {
+      "feature": "elo_momentumB",
+      "importance": 0.006533197932381496
     },
     {
       "feature": "tiebreak_playedB",
-      "importance": 0.005488481231899366
+      "importance": 0.0058174963599912696
     },
     {
-      "feature": "rankA",
-      "importance": 0.004981953430273915
+      "feature": "elo_bigA",
+      "importance": 0.0041648228149235396
     }
   ],
   "blend": {
     "alpha": 0.0,
     "per_year_alpha": {
-      "2022": 0.04,
-      "2023": 0.09500000000000001,
+      "2022": 0.025,
+      "2023": 0.085,
       "2024": 0.0
     },
     "val": {
       "n": 7794,
       "model": {
-        "logloss": 0.6046119701327596,
-        "brier": 0.20957939733985173,
-        "accuracy": 0.6607646907877854
+        "logloss": 0.6048650570561331,
+        "brier": 0.2096608579327379,
+        "accuracy": 0.6590967410828843
       },
       "blend": {
-        "logloss": 0.5830737338812697,
-        "brier": 0.20013889074814872,
+        "logloss": 0.5830919069099342,
+        "brier": 0.2001485701451882,
         "accuracy": 0.680651783423146
       }
     },
     "test": {
       "n": 3639,
       "model": {
-        "logloss": 0.6120198471218126,
-        "brier": 0.2127816022949245,
-        "accuracy": 0.6540258312723276
+        "logloss": 0.6125406162729246,
+        "brier": 0.21298555943597308,
+        "accuracy": 0.6532014289640011
       },
       "blend": {
         "logloss": 0.5895355471770413,
