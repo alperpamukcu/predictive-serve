@@ -3,54 +3,54 @@
   "n_features": 76,
   "validation": {
     "n": 7794,
-    "logloss": 0.6043143434237294,
-    "brier": 0.2096543733711679,
-    "accuracy": 0.6593533487297921
+    "logloss": 0.6054545303408373,
+    "brier": 0.21023077544303473,
+    "accuracy": 0.6596099563767001
   },
   "test": {
-    "n": 3756,
-    "logloss": 0.6142703895072682,
-    "brier": 0.21343816585422418,
-    "accuracy": 0.6552183173588925
+    "n": 3810,
+    "logloss": 0.6150192960427506,
+    "brier": 0.21385386030813616,
+    "accuracy": 0.6509186351706037
   },
   "market_baseline_val": {
     "n": 7774,
     "logloss": 0.5828654620734544,
     "brier": 0.2000763928863253,
-    "accuracy": 0.6816310779521482
+    "accuracy": 0.6817597118600464
   },
   "feature_importance": [],
   "blend": {
-    "alpha": 0.05,
+    "alpha": 0.03,
     "per_year_alpha": {
-      "2022": 0.075,
-      "2023": 0.15500000000000003,
+      "2022": 0.035,
+      "2023": 0.11000000000000001,
       "2024": 0.0
     },
     "val": {
       "n": 7794,
       "model": {
-        "logloss": 0.6050761867516531,
-        "brier": 0.20999696859769765,
-        "accuracy": 0.6578137028483448
+        "logloss": 0.6059000087420479,
+        "brier": 0.2103569869304993,
+        "accuracy": 0.6599948678470619
       },
       "blend": {
-        "logloss": 0.5828806951927614,
-        "brier": 0.20003565101730272,
-        "accuracy": 0.6809083910700539
+        "logloss": 0.5830322086215969,
+        "brier": 0.20012129637491846,
+        "accuracy": 0.6824480369515011
       }
     },
     "test": {
-      "n": 3756,
+      "n": 3810,
       "model": {
-        "logloss": 0.6142703895072682,
-        "brier": 0.21343816585422418,
-        "accuracy": 0.6552183173588925
+        "logloss": 0.6150192960427506,
+        "brier": 0.21385386030813616,
+        "accuracy": 0.6509186351706037
       },
       "blend": {
-        "logloss": 0.5897340397710156,
-        "brier": 0.20288570158390382,
-        "accuracy": 0.6831735889243876
+        "logloss": 0.590433095167803,
+        "brier": 0.2031928511130197,
+        "accuracy": 0.6811023622047244
       }
     }
   },
@@ -58,79 +58,79 @@
     {
       "bin_low": 0.0,
       "bin_high": 0.1,
-      "n": 69,
-      "mean_pred": 0.07053819693903911,
-      "observed_rate": 0.043478260869565216
+      "n": 75,
+      "mean_pred": 0.06920231359639463,
+      "observed_rate": 0.02666666666666667
     },
     {
       "bin_low": 0.1,
       "bin_high": 0.2,
-      "n": 207,
-      "mean_pred": 0.1525705849397386,
-      "observed_rate": 0.14009661835748793
+      "n": 208,
+      "mean_pred": 0.15583053960805485,
+      "observed_rate": 0.12980769230769232
     },
     {
       "bin_low": 0.2,
       "bin_high": 0.30000000000000004,
-      "n": 444,
-      "mean_pred": 0.25583932318419755,
-      "observed_rate": 0.2545045045045045
+      "n": 473,
+      "mean_pred": 0.2578179051210289,
+      "observed_rate": 0.266384778012685
     },
     {
       "bin_low": 0.30000000000000004,
       "bin_high": 0.4,
-      "n": 596,
-      "mean_pred": 0.3581278265925912,
-      "observed_rate": 0.348993288590604
+      "n": 588,
+      "mean_pred": 0.3586455254251026,
+      "observed_rate": 0.35034013605442177
     },
     {
       "bin_low": 0.4,
       "bin_high": 0.5,
-      "n": 486,
-      "mean_pred": 0.44458901062710926,
-      "observed_rate": 0.43209876543209874
+      "n": 490,
+      "mean_pred": 0.44331392717732027,
+      "observed_rate": 0.44081632653061226
     },
     {
       "bin_low": 0.5,
       "bin_high": 0.6000000000000001,
-      "n": 614,
-      "mean_pred": 0.5471998218516196,
-      "observed_rate": 0.5407166123778502
+      "n": 627,
+      "mean_pred": 0.546063662064031,
+      "observed_rate": 0.5406698564593302
     },
     {
       "bin_low": 0.6000000000000001,
       "bin_high": 0.7000000000000001,
-      "n": 557,
-      "mean_pred": 0.6418559202540186,
-      "observed_rate": 0.6624775583482945
+      "n": 581,
+      "mean_pred": 0.6424724709734656,
+      "observed_rate": 0.6592082616179001
     },
     {
       "bin_low": 0.7000000000000001,
       "bin_high": 0.8,
-      "n": 476,
-      "mean_pred": 0.7433690652166645,
-      "observed_rate": 0.7352941176470589
+      "n": 465,
+      "mean_pred": 0.7449638423463909,
+      "observed_rate": 0.7483870967741936
     },
     {
       "bin_low": 0.8,
       "bin_high": 0.9,
-      "n": 198,
-      "mean_pred": 0.8435032669029067,
-      "observed_rate": 0.8737373737373737
+      "n": 200,
+      "mean_pred": 0.8467304540719861,
+      "observed_rate": 0.86
     },
     {
       "bin_low": 0.9,
       "bin_high": 1.0,
-      "n": 109,
-      "mean_pred": 0.9312265094008917,
-      "observed_rate": 0.944954128440367
+      "n": 103,
+      "mean_pred": 0.9303565772391562,
+      "observed_rate": 0.9320388349514563
     }
   ],
   "tournament_accuracy_test": [
     {
-      "tournament": "Barcelona Open",
-      "n": 59,
-      "accuracy": 0.8135593220338984
+      "tournament": "Vienna Open",
+      "n": 30,
+      "accuracy": 0.8333333333333334
     },
     {
       "tournament": "Qatar Exxon Mobil Open",
@@ -143,6 +143,11 @@
       "accuracy": 0.7857142857142857
     },
     {
+      "tournament": "Barcelona Open",
+      "n": 59,
+      "accuracy": 0.7796610169491526
+    },
+    {
       "tournament": "Japan Open Tennis Championships",
       "n": 31,
       "accuracy": 0.7741935483870968
@@ -153,28 +158,23 @@
       "accuracy": 0.7702127659574468
     },
     {
-      "tournament": "Vienna Open",
-      "n": 30,
-      "accuracy": 0.7666666666666667
-    },
-    {
-      "tournament": "Nordic Open",
-      "n": 25,
-      "accuracy": 0.76
-    },
-    {
-      "tournament": "Stuttgart Open",
-      "n": 25,
-      "accuracy": 0.76
-    },
-    {
       "tournament": "Almaty Open",
       "n": 27,
       "accuracy": 0.7407407407407407
     },
     {
-      "tournament": "Swiss Indoors",
-      "n": 26,
+      "tournament": "Dallas Open",
+      "n": 61,
+      "accuracy": 0.7377049180327869
+    },
+    {
+      "tournament": "ABN AMRO World Tennis Tournament",
+      "n": 60,
+      "accuracy": 0.7333333333333333
+    },
+    {
+      "tournament": "Geneva Open",
+      "n": 52,
       "accuracy": 0.7307692307692307
     },
     {
@@ -188,9 +188,9 @@
       "accuracy": 0.7295081967213115
     },
     {
-      "tournament": "French Open",
-      "n": 242,
-      "accuracy": 0.7231404958677686
+      "tournament": "Monte Carlo Masters",
+      "n": 107,
+      "accuracy": 0.7289719626168224
     },
     {
       "tournament": "BNP Paribas Masters",
@@ -198,27 +198,12 @@
       "accuracy": 0.7222222222222222
     },
     {
-      "tournament": "Dallas Open",
-      "n": 61,
-      "accuracy": 0.7213114754098361
+      "tournament": "French Open",
+      "n": 242,
+      "accuracy": 0.71900826446281
     },
     {
       "tournament": "Rosmalen Grass Court Championships",
-      "n": 25,
-      "accuracy": 0.72
-    },
-    {
-      "tournament": "Monte Carlo Masters",
-      "n": 107,
-      "accuracy": 0.719626168224299
-    },
-    {
-      "tournament": "ABN AMRO World Tennis Tournament",
-      "n": 60,
-      "accuracy": 0.7166666666666667
-    },
-    {
-      "tournament": "Tiriac Open",
       "n": 52,
       "accuracy": 0.7115384615384616
     },
@@ -228,24 +213,19 @@
       "accuracy": 0.7049180327868853
     },
     {
-      "tournament": "Mallorca Championships",
-      "n": 27,
-      "accuracy": 0.7037037037037037
-    },
-    {
       "tournament": "Hellenic Championship",
       "n": 27,
       "accuracy": 0.7037037037037037
     },
     {
-      "tournament": "US Open",
-      "n": 121,
-      "accuracy": 0.7024793388429752
+      "tournament": "Mallorca Championships",
+      "n": 27,
+      "accuracy": 0.7037037037037037
     },
     {
-      "tournament": "Queen's Club Championships",
-      "n": 30,
-      "accuracy": 0.7
+      "tournament": "Citi Open",
+      "n": 47,
+      "accuracy": 0.7021276595744681
     },
     {
       "tournament": "Dubai Tennis Championships",
@@ -253,12 +233,22 @@
       "accuracy": 0.7
     },
     {
-      "tournament": "Delray Beach Open",
-      "n": 52,
+      "tournament": "Queen's Club Championships",
+      "n": 30,
+      "accuracy": 0.7
+    },
+    {
+      "tournament": "US Open",
+      "n": 121,
+      "accuracy": 0.6942148760330579
+    },
+    {
+      "tournament": "Swiss Indoors",
+      "n": 26,
       "accuracy": 0.6923076923076923
     },
     {
-      "tournament": "Geneva Open",
+      "tournament": "Tiriac Open",
       "n": 52,
       "accuracy": 0.6923076923076923
     },
@@ -268,14 +258,24 @@
       "accuracy": 0.6923076923076923
     },
     {
+      "tournament": "Mutua Madrid Open",
+      "n": 177,
+      "accuracy": 0.6892655367231638
+    },
+    {
       "tournament": "European Open",
       "n": 25,
       "accuracy": 0.68
     },
     {
-      "tournament": "Mutua Madrid Open",
-      "n": 177,
-      "accuracy": 0.6779661016949152
+      "tournament": "Nordic Open",
+      "n": 25,
+      "accuracy": 0.68
+    },
+    {
+      "tournament": "Open 13",
+      "n": 25,
+      "accuracy": 0.68
     },
     {
       "tournament": "Abierto Mexicano",
@@ -283,9 +283,9 @@
       "accuracy": 0.6779661016949152
     },
     {
-      "tournament": "BNP Paribas Open",
-      "n": 183,
-      "accuracy": 0.6775956284153005
+      "tournament": "Canadian Open",
+      "n": 90,
+      "accuracy": 0.6777777777777778
     },
     {
       "tournament": "Halle Open",
@@ -293,29 +293,24 @@
       "accuracy": 0.6774193548387096
     },
     {
+      "tournament": "Delray Beach Open",
+      "n": 52,
+      "accuracy": 0.6730769230769231
+    },
+    {
+      "tournament": "BNP Paribas Open",
+      "n": 183,
+      "accuracy": 0.6721311475409836
+    },
+    {
       "tournament": "Suisse Open Gstaad",
       "n": 27,
       "accuracy": 0.6666666666666666
     },
     {
-      "tournament": "Canadian Open",
-      "n": 90,
-      "accuracy": 0.6666666666666666
-    },
-    {
-      "tournament": "ASB Classic",
-      "n": 53,
-      "accuracy": 0.660377358490566
-    },
-    {
-      "tournament": "U.S.Men's Clay Court Championships",
-      "n": 53,
-      "accuracy": 0.660377358490566
-    },
-    {
-      "tournament": "Citi Open",
-      "n": 47,
-      "accuracy": 0.6595744680851063
+      "tournament": "Stuttgart Open",
+      "n": 52,
+      "accuracy": 0.6538461538461539
     },
     {
       "tournament": "Hangzhou Open",
@@ -326,6 +321,11 @@
       "tournament": "Hong Kong Tennis Open",
       "n": 40,
       "accuracy": 0.65
+    },
+    {
+      "tournament": "U.S.Men's Clay Court Championships",
+      "n": 53,
+      "accuracy": 0.6415094339622641
     }
   ]
 }
