@@ -183,6 +183,11 @@
       "accuracy": 0.7307692307692307
     },
     {
+      "tournament": "Stuttgart Open",
+      "n": 52,
+      "accuracy": 0.7307692307692307
+    },
+    {
       "tournament": "Wimbledon",
       "n": 122,
       "accuracy": 0.7295081967213115
@@ -201,11 +206,6 @@
       "tournament": "French Open",
       "n": 242,
       "accuracy": 0.71900826446281
-    },
-    {
-      "tournament": "Rosmalen Grass Court Championships",
-      "n": 52,
-      "accuracy": 0.7115384615384616
     },
     {
       "tournament": "BMW Open",
@@ -308,11 +308,6 @@
       "accuracy": 0.6666666666666666
     },
     {
-      "tournament": "Stuttgart Open",
-      "n": 52,
-      "accuracy": 0.6538461538461539
-    },
-    {
       "tournament": "Hangzhou Open",
       "n": 26,
       "accuracy": 0.6538461538461539
@@ -324,6 +319,11 @@
     },
     {
       "tournament": "U.S.Men's Clay Court Championships",
+      "n": 53,
+      "accuracy": 0.6415094339622641
+    },
+    {
+      "tournament": "ASB Classic",
       "n": 53,
       "accuracy": 0.6415094339622641
     }
