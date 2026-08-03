@@ -57,9 +57,12 @@ jobs:
           API_TENNIS_KEY: ${{ secrets.API_TENNIS_KEY }}
           RECENT_RESULTS_PAST_DAYS: "21"
         if: ${{ env.API_TENNIS_KEY != '' }}
+        # No `|| true` here: this step builds the data the model is trained
+        # on. If it fails we want the job to stop BEFORE training + commit,
+        # so the already-committed (stale but complete) dataset survives.
         run: |
-          python -m src.data.fetch_recent_results_apitennis || true
-          python -m src.data.merge_recent_results || true
+          python -m src.data.fetch_recent_results_apitennis
+          python -m src.data.merge_recent_results
 
       - name: Feature engineering
         run: |
