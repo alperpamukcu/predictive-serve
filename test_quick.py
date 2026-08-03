@@ -32,6 +32,55 @@ def _finished_event(day: dt.date, first: str, second: str) -> Dict[str, Any]:
     }
 
 
+def test_api_key_never_in_errors() -> list[str]:
+    """The API key must not travel in an exception message.
+
+    ``raise_for_status()`` embeds the request URL, which carries
+    ``APIkey=<secret>``; an error payload can echo the request too.
+    """
+    import requests
+
+    import src.integrations.api_tennis as api
+
+    errors: list[str] = []
+    key = "unit-test-secret-key"
+    cfg = api.ApiTennisConfig(api_key=key, max_attempts=1)
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: Dict[str, Any]):
+            self.status_code = status_code
+            self.headers: Dict[str, str] = {}
+            self.url = f"{cfg.base_url}?method=get_fixtures&APIkey={key}"
+            self._payload = payload
+
+        def json(self) -> Dict[str, Any]:
+            return self._payload
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.exceptions.HTTPError(
+                    f"{self.status_code} Client Error: for url: {self.url}", response=self
+                )
+
+    saved = api._request
+    try:
+        for label, response in (
+            ("HTTP error", FakeResponse(403, {})),
+            ("error payload", FakeResponse(200, {"success": 0, "msg": f"APIkey={key}"})),
+        ):
+            api._request = lambda cfg_, p, proxies, _r=response: _r
+            try:
+                api._get(cfg, {"method": "get_fixtures"})
+            except Exception as e:
+                if key in str(e):
+                    errors.append(f"API key leaked in the {label} message")
+            else:
+                errors.append(f"expected {label} to raise")
+    finally:
+        api._request = saved
+    return errors
+
+
 def test_partial_fetch_never_truncates() -> list[str]:
     """Regression guard for the silent partial-refresh path.
 
@@ -173,7 +222,20 @@ def test_basic() -> bool:
         errors.append(f"partial-fetch guard: {e}")
         print(f"[FAIL] partial-fetch guard: {e}")
 
-    # 5) Streamlit app parses
+    # 5) API key stays out of exception messages
+    try:
+        leak_errors = test_api_key_never_in_errors()
+        if leak_errors:
+            for msg in leak_errors:
+                print(f"[FAIL] {msg}")
+            errors.extend(leak_errors)
+        else:
+            print("[OK] API-Tennis errors are redacted.")
+    except Exception as e:
+        errors.append(f"api-key redaction check: {e}")
+        print(f"[FAIL] api-key redaction check: {e}")
+
+    # 6) Streamlit app parses
     try:
         import ast
 
