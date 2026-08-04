@@ -68326,4 +68326,4 @@ date,tourney,surface,round,playerA,playerB,rankA,rankB,oddsA,oddsB,score,comment
 2026-08-01,Los Cabos Open,Hard,Semifinals,Gea A.,Wong C.,127.0,108.0,1.73,2.1,7-6,Completed,allyears.csv,M,A,gea a.,wong c.,0.5483028720626633,0.4516971279373368
 2026-08-02,Citi Open,Hard,Semifinals,Jodar R.,Tabilo A.,24.0,30.0,1.36,3.2,6-7 6-4,Completed,allyears.csv,M,A,jodar r.,tabilo a.,0.7017543859649122,0.2982456140350877
 2026-08-02,Los Cabos Open,Hard,The Final,Gea A.,Shapovalov D.,127.0,68.0,2.3,1.62,6-3,Completed,allyears.csv,M,A,gea a.,shapovalov d.,0.413265306122449,0.586734693877551
-2026-08-03,Citi Open,Hard,The Final,Jodar R.,Fritz T.,24.0,10.0,2.3,1.62,,,allyears.csv,M,A,jodar r.,fritz t.,0.413265306122449,0.586734693877551
+2026-08-03,Citi Open,Hard,The Final,Fritz T.,Jodar R.,10.0,24.0,1.57,2.38,7-6,Completed,allyears.csv,M,A,fritz t.,jodar r.,0.6025316455696202,0.3974683544303797
