@@ -11,8 +11,11 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import random
+import re
 import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -67,6 +70,9 @@ class ApiTennisConfig:
     timeout_s: int = 30
     proxy: Optional[str] = None
     cache_ttl_s: int = 0  # 0 disables cache
+    max_attempts: int = 3        # total tries per request; 1 = no retry
+    backoff_base_s: float = 1.0  # base * 2**(n-1) + jitter, unless Retry-After
+    backoff_max_s: float = 30.0
 
 
 def _cache_path(method: str, params: Dict[str, Any]) -> Path:
@@ -97,6 +103,56 @@ def _write_cache(path: Path, payload: Dict[str, Any]) -> None:
         pass
 
 
+def _redact(text: str, api_key: str) -> str:
+    """Remove the API key from anything we print or raise.
+
+    ``raise_for_status()`` puts the full request URL in the exception
+    message, and that URL carries ``APIkey=<secret>``. An error payload can
+    echo the request back for the same reason. Under Actions the registered
+    secret is masked, but a local run or a pasted traceback isn't.
+    """
+    out = re.sub(r"(APIkey=)[^&\s'\"]+", r"\1<redacted>", text, flags=re.IGNORECASE)
+    if api_key:
+        out = out.replace(api_key, "<redacted>")
+    return out
+
+
+def _retry_after_s(resp: requests.Response) -> Optional[float]:
+    """``Retry-After`` as seconds — the header may be delta-seconds or a date."""
+    raw = (resp.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=dt.timezone.utc)
+        return max(0.0, (when - dt.datetime.now(dt.timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def _request(cfg: ApiTennisConfig, p: Dict[str, Any], proxies: Optional[Dict[str, str]]):
+    # First try the default urllib3 stack. If it blows up with an SSL
+    # version / handshake error (common on ISPs that MITM TLS 1.3 traffic,
+    # or when OpenSSL 3 rejects legacy renegotiation), retry once with the
+    # forced TLS-1.2 + legacy-renegotiation adapter. The urllib3 retry
+    # layer wraps SSL errors in ConnectionError, so we check the message
+    # rather than the exception class.
+    try:
+        return requests.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
+    except requests.exceptions.RequestException as e:
+        msg = str(e).lower()
+        ssl_hints = ("wrong_version_number", "unsafe_legacy_renegotiation", "ssl: ", "handshake")
+        if any(h in msg for h in ssl_hints):
+            with _legacy_session() as sess:
+                return sess.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
+        raise
+
+
 def _get(cfg: ApiTennisConfig, params: Dict[str, Any]) -> Dict[str, Any]:
     method = str(params.get("method", "unknown"))
     cache_path = _cache_path(method, params)
@@ -110,27 +166,38 @@ def _get(cfg: ApiTennisConfig, params: Dict[str, Any]) -> Dict[str, Any]:
     if cfg.proxy:
         proxies = {"http": cfg.proxy, "https": cfg.proxy}
 
-    # First try the default urllib3 stack. If it blows up with an SSL
-    # version / handshake error (common on ISPs that MITM TLS 1.3 traffic,
-    # or when OpenSSL 3 rejects legacy renegotiation), retry once with the
-    # forced TLS-1.2 + legacy-renegotiation adapter. The urllib3 retry
-    # layer wraps SSL errors in ConnectionError, so we check the message
-    # rather than the exception class.
-    try:
-        resp = requests.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
-    except requests.exceptions.RequestException as e:
-        msg = str(e).lower()
-        ssl_hints = ("wrong_version_number", "unsafe_legacy_renegotiation", "ssl: ", "handshake")
-        if any(h in msg for h in ssl_hints):
-            with _legacy_session() as sess:
-                resp = sess.get(cfg.base_url, params=p, timeout=cfg.timeout_s, proxies=proxies)
-        else:
-            raise
+    # The daily refresh makes many sequential calls (chunked fixtures,
+    # per-match odds, per-player roster + photos), which is exactly the
+    # shape that trips a rate limit. Retry 429 and 5xx a bounded number of
+    # times, honouring Retry-After; everything else raises on the first try.
+    attempts = max(1, cfg.max_attempts)
+    for attempt in range(1, attempts + 1):
+        resp = _request(cfg, p, proxies)
+        retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
+        if not retryable or attempt == attempts:
+            break
+        delay = _retry_after_s(resp)
+        if delay is None:
+            delay = cfg.backoff_base_s * (2 ** (attempt - 1))
+            delay += random.uniform(0.0, cfg.backoff_base_s)
+        delay = min(delay, cfg.backoff_max_s)
+        print(
+            f"[api-tennis] {method}: HTTP {resp.status_code}, "
+            f"retrying in {delay:.1f}s (attempt {attempt}/{attempts})"
+        )
+        time.sleep(delay)
 
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        # Rewrite the message in place so the response/request objects and
+        # the exception type survive for callers that inspect them.
+        e.args = tuple(_redact(str(a), cfg.api_key) for a in e.args)
+        raise
+
     payload = resp.json()
     if isinstance(payload, dict) and payload.get("success") in (0, "0"):
-        raise RuntimeError(str(payload))
+        raise RuntimeError(_redact(str(payload), cfg.api_key))
     out = payload if isinstance(payload, dict) else {"result": payload}
     _write_cache(cache_path, out)
     return out

@@ -203,14 +203,31 @@ def main() -> int:
 
     # API rejects >14-day windows; chunk if necessary.
     events: List[Dict[str, Any]] = []
+    failed: List[str] = []
+    chunks = 0
     cur = start
     while cur <= today:
         chunk_stop = min(cur + dt.timedelta(days=13), today)
+        chunks += 1
         try:
             events.extend(get_fixtures(cfg, date_start=cur, date_stop=chunk_stop))
         except Exception as e:
             print(f"[recent-results] WARNING: chunk {cur}..{chunk_stop} failed: {e}")
+            failed.append(f"{cur}..{chunk_stop}")
         cur = chunk_stop + dt.timedelta(days=1)
+
+    # A missing chunk means the window is incomplete, and the matches it
+    # would have carried are exactly the ones tennis-data.co.uk hasn't
+    # published yet. Writing anyway would replace the committed dataset with
+    # a smaller one and retrain the model on it, with nothing but a WARNING
+    # to say so — so leave the existing file alone and fail loudly instead.
+    # The next scheduled run picks the window up again.
+    if failed:
+        print(
+            f"[recent-results] ERROR: {len(failed)}/{chunks} chunk(s) failed "
+            f"({', '.join(failed)}) — incomplete window, leaving {OUT_PATH} untouched."
+        )
+        return 1
 
     rows: List[Dict[str, Any]] = []
     rejected = {"not_finished": 0, "not_atp_singles": 0, "no_winner": 0, "missing_date": 0}
